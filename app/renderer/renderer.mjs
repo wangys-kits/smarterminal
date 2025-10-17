@@ -11,9 +11,7 @@ const termEl = document.getElementById('term');
 const chatContainer = document.getElementById('chatContainer');
 const chatMessages = document.getElementById('chatMessages');
 const commandInput = document.getElementById('commandInput');
-const cwdLabel = document.getElementById('cwdLabel');
-const fileTbody = document.getElementById('fileTbody');
-const divider = document.getElementById('divider');
+const chatContextMenu = document.getElementById('chatContextMenu');
 const uploadBtn = document.getElementById('uploadBtn');
 const txCloseBtn = document.getElementById('txCloseBtn');
 const connectModal = document.getElementById('connectModal');
@@ -38,12 +36,10 @@ const hkPersist = document.getElementById('hkPersist');
 let lastConnect = null; // remember current connect attempt {host,port,username,password}
 
 let state = {
-  splitRatio: 0.6,
+  splitRatio: 0.5, // Changed from 0.6 to 0.5 for more balanced split (50/50)
   tabs: [], // {id,title,ptyId,cwd,term,chatTerm,type,connId}
   activeId: null,
-  filePanelCollapsed: false,
-  filePanelPreviousRatio: 0.6,
-  useChatMode: false // Toggle between xterm.js and chat-style terminal
+  useChatMode: true // Changed to true for default chat mode
 };
 let sshAvailable = false;
 let selection = new Set();
@@ -51,11 +47,97 @@ let selection = new Set();
 async function init() {
   const s = await sm.settings.get();
   if (s.ok && s.data.splitRatio) state.splitRatio = s.data.splitRatio;
-  if (s.ok && s.data.filePanelCollapsed !== undefined) state.filePanelCollapsed = s.data.filePanelCollapsed;
   applySplitRatio();
-  setupFilePanelToggle();
+  setupChatContextMenu();
   await addNewTab('local');
   try { const a = await sm.ssh.available(); sshAvailable = !!(a.ok && a.data); } catch { sshAvailable = false; }
+}
+
+function setupChatContextMenu() {
+  if (!chatContainer || !chatContextMenu) return;
+
+  // Show context menu on right click
+  chatContainer.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    
+    // Hide file context menu if visible
+    const fileContextMenu = document.getElementById('fileContextMenu');
+    if (fileContextMenu) {
+      fileContextMenu.classList.add('hidden');
+    }
+    
+    // Position and show chat context menu
+    const x = e.clientX;
+    const y = e.clientY;
+    
+    chatContextMenu.style.left = `${x}px`;
+    chatContextMenu.style.top = `${y}px`;
+    chatContextMenu.classList.remove('hidden');
+  });
+
+  // Hide context menu when clicking elsewhere
+  document.addEventListener('click', (e) => {
+    if (!chatContextMenu.contains(e.target)) {
+      chatContextMenu.classList.add('hidden');
+    }
+  });
+
+  // Handle context menu actions
+  chatContextMenu.addEventListener('click', (e) => {
+    const action = e.target.closest('.context-menu-item')?.dataset.action;
+    if (!action) return;
+
+    switch (action) {
+      case 'copy':
+        copySelectedText();
+        break;
+      case 'selectAll':
+        selectAllText();
+        break;
+    }
+    
+    chatContextMenu.classList.add('hidden');
+  });
+}
+
+function copySelectedText() {
+  try {
+    // Try to use the modern clipboard API first
+    if (navigator.clipboard && window.isSecureContext) {
+      const selectedText = window.getSelection().toString();
+      if (selectedText) {
+        navigator.clipboard.writeText(selectedText);
+        return;
+      }
+    }
+    
+    // Fallback to document.execCommand
+    document.execCommand('copy');
+  } catch (err) {
+    console.error('Failed to copy text: ', err);
+  }
+}
+
+function selectAllText() {
+  try {
+    // Create a range that selects all text in chat messages
+    const range = document.createRange();
+    range.selectNodeContents(chatMessages);
+    
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  } catch (err) {
+    console.error('Failed to select all text: ', err);
+    
+    // Fallback to document.execCommand
+    try {
+      chatMessages.focus();
+      document.execCommand('selectAll', false, null);
+    } catch (fallbackErr) {
+      console.error('Fallback select all also failed: ', fallbackErr);
+    }
+  }
 }
 
 function applySplitRatio() {
@@ -90,10 +172,27 @@ async function loadXtermTheme() {
 
 async function addNewTab(type, ssh = null) {
   const id = `${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-  const term = new Terminal({ cursorBlink: true, theme: await loadXtermTheme() });
+  const term = new Terminal({ 
+  cursorBlink: true, 
+  scrollback: 10000, // Increase scrollback buffer
+  fontSize: 14,
+  fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+  letterSpacing: 0,
+  lineHeight: 1,
+  allowTransparency: false,
+  theme: {
+    ...await loadXtermTheme(),
+    foreground: '#E8ECF2',
+    background: '#0B1220'
+  }
+});
 
   // Initialize chat terminal
   const chatTerm = new ChatTerminal(chatContainer, commandInput, chatMessages, null);
+  
+  // Clear chat messages for new tab and add welcome message
+  chatTerm.clearMessages();
+  addWelcomeMessage(chatMessages);
 
   let ptyId, writer, resizer;
   if (type === 'ssh' && ssh) {
@@ -132,9 +231,10 @@ async function addNewTab(type, ssh = null) {
   });
 
   const home = type === 'ssh' ? '/' : await detectHome();
+  const initialTitle = type === 'ssh' ? (ssh.label || ssh.host || getDirName(home)) : getDirName(home);
   state.tabs.push({
     id,
-    title: type === 'ssh' ? (ssh.label || ssh.host || 'ssh') : 'local',
+    title: initialTitle,
     ptyId,
     cwd: home,
     term,
@@ -147,8 +247,15 @@ async function addNewTab(type, ssh = null) {
   setActiveTab(id);
   renderTabs();
 
-  // Initial CWD probe so file pane shows something without manual click
-  setTimeout(() => writer('printf \"\\nSM_CWD:%s\\n\" \"$PWD\"\r'), 50);
+  // Initial CWD probe so tab title shows current directory without manual click
+  // Add slight delay to ensure shell is ready
+  setTimeout(() => {
+    try {
+      writer('printf "\\nSM_CWD:%s\\n" "$PWD"\r');
+    } catch (e) {
+      console.warn('Failed to send CWD probe:', e);
+    }
+  }, 100);
 }
 
 async function detectHome() {
@@ -157,18 +264,41 @@ async function detectHome() {
   return isWindows ? 'C:/' : '/';
 }
 
+function addWelcomeMessage(messagesEl) {
+  // Add welcome message to chat
+  const welcomeMsg = document.createElement('div');
+  welcomeMsg.className = 'system-message';
+  welcomeMsg.innerHTML = `
+    <div class="message-icon">🚀</div>
+    <div class="message-content">
+      <div class="message-text">Welcome to Smarterminal</div>
+      <div class="message-hint">
+        Type a command below •
+        <kbd>Ctrl+Space</kbd> Suggestions •
+        <kbd>Ctrl+L</kbd> Clear •
+        <kbd>Ctrl+K</kbd> Export
+      </div>
+    </div>
+  `;
+  messagesEl.appendChild(welcomeMsg);
+}
+
 function setActiveTab(id) {
+  // Save current tab's chat history before switching
+  const currentTab = state.tabs.find(x => x.id === state.activeId);
+  if (currentTab && currentTab.chatTerm && state.useChatMode) {
+    currentTab.chatTerm.saveMessageHistory();
+  }
+
   state.activeId = id;
   const t = state.tabs.find(x => x.id === id);
   if (!t) return;
-  cwdLabel.textContent = t.cwd || '';
 
   // Update connection status
   updateConnectionStatus(t.type, t.title);
 
-  // Update current path in chat input
-  const currentPath = document.getElementById('currentPath');
-  if (currentPath) currentPath.textContent = t.cwd || '~';
+  // Update current path in chat input with just directory name
+  updateCurrentPathDisplay();
 
   // Switch terminal UI based on mode
   if (state.useChatMode) {
@@ -177,8 +307,9 @@ function setActiveTab(id) {
     termEl.style.display = 'none';
     document.querySelector('.command-input-wrapper').style.display = 'block';
 
-    // Clear and prepare chat terminal - don't show welcome on every tab switch
+    // Restore chat messages for this tab
     if (t.chatTerm) {
+      t.chatTerm.restoreMessageHistory();
       t.chatTerm.focus();
     }
   } else {
@@ -195,7 +326,6 @@ function setActiveTab(id) {
   }
 
   renderTabs();
-  refreshFiles();
 }
 
 function closeTab(id) {
@@ -218,57 +348,69 @@ function fitTerminalToPane() {
   if (t) (t.resize ? t.resize(cols, rows) : sm.term.resize({ ptyId: t.ptyId, cols, rows }));
 }
 
-async function refreshFiles() {
-  const t = state.tabs.find(x => x.id === state.activeId);
-  if (!t || !t.cwd) return;
-  cwdLabel.textContent = t.cwd;
-  const res = t.type === 'ssh' && t.connId ? await sm.ssh.sftpList({ connId: t.connId, path: t.cwd }) : await sm.fs.list({ path: t.cwd });
-  fileTbody.innerHTML = '';
-  if (!res.ok) { const r = document.createElement('div'); r.className='file-row'; r.textContent = 'Error: ' + res.error; fileTbody.appendChild(r); return; }
-  const rows = res.data;
-  rows.sort((a,b)=> a.type===b.type ? a.name.localeCompare(b.name) : (a.type==='dir'?-1:1));
-  for (const r of rows) {
-    const row = document.createElement('div'); row.className='file-row'; row.dataset.name = r.name; row.dataset.type = r.type;
-    const name = document.createElement('div'); name.className='col-name'; name.textContent = r.name + (r.type==='dir'?'/':(r.type==='symlink'?' →':''));
-    const size = document.createElement('div'); size.className='col-size'; size.textContent = r.type==='file'? human(r.size) : '—';
-    const mt = document.createElement('div'); mt.className='col-modified'; mt.textContent = r.mtime ? new Date(r.mtime).toLocaleString() : '';
-    const type = document.createElement('div'); type.className='col-type'; type.textContent = r.type;
-    row.append(name,size,mt,type); fileTbody.appendChild(row);
-    row.ondblclick = () => onRowOpen(r);
-    row.onclick = (e) => { onRowSelect(row, e); };
-  }
-}
 
 function human(n) { if (n < 1024) return `${n} B`; const u=['KB','MB','GB','TB']; let i=-1; do { n/=1024; i++; } while(n>=1024&&i<u.length-1); return `${n.toFixed(1)} ${u[i]}`; }
 
-// Divider drag
-let drag=false, startY=0, startRatio=state.splitRatio;
-divider.addEventListener('mousedown', (e)=>{ drag=true; startY=e.clientY; startRatio=state.splitRatio; document.body.style.cursor='row-resize'; });
-window.addEventListener('mouseup', ()=>{ drag=false; document.body.style.cursor=''; });
-window.addEventListener('mousemove', (e)=>{
-  if (!drag) return; const h = window.innerHeight - (56 + 40); const dy = e.clientY - startY; const delta = dy / h; state.splitRatio = Math.max(0.2, Math.min(0.85, startRatio + delta)); applySplitRatio(); fitTerminalToPane(); });
 
 window.addEventListener('resize', () => fitTerminalToPane());
 
-function updateCwd(tabId, cwd) {
-  const t = state.tabs.find(x => x.id === tabId); if (!t) return;
-  t.cwd = cwd; if (t.id === state.activeId) { cwdLabel.textContent = cwd; refreshFiles(); }
-}
 
 function handleTermData(tabId, term, chatTerm, data) {
-  term.write(data);
-
-  // Send to chat terminal if in chat mode
-  if (state.useChatMode && chatTerm) {
-    chatTerm.handleTerminalOutput(data);
-  }
+  // Debug logging to see what raw terminal data we're receiving
+  console.log('[DEBUG] Raw terminal data received:', JSON.stringify(data));
+  console.log('[DEBUG] Data length:', data ? data.length : 0);
+  console.log('[DEBUG] Tab ID:', tabId);
+  console.log('[DEBUG] Chat mode:', state.useChatMode);
 
   // Handle CWD updates
   const idx = data.indexOf('SM_CWD:');
   if (idx >= 0) {
     const line = data.slice(idx).split('\n')[0];
     const v = line.replace(/^SM_CWD:/, '').trim();
-    if (v) updateCwd(tabId, v);
+
+    // Update tab's current working directory and title
+    const tab = state.tabs.find(t => t.id === tabId);
+    if (tab) {
+      tab.cwd = v;
+      tab.title = getDirName(v);
+
+      // Update current path display if this is the active tab
+      if (tab.id === state.activeId) {
+        updateCurrentPathDisplay();
+      }
+
+      renderTabs();
+    }
+
+    // Remove CWD data from what's displayed to avoid showing it in terminal
+    data = data.replace(/\r?\n?SM_CWD:.*\r?\n?/, '');
+    console.log('[DEBUG] Data after CWD removal:', JSON.stringify(data));
+  }
+
+  // Even if there's no data left after CWD processing, still process it
+  // to ensure we don't miss important empty responses
+  if (!data) {
+    console.log('[DEBUG] No data to process, but still sending to terminals');
+    data = ''; // Ensure we have a string to work with
+  }
+
+  term.write(data);
+
+  // Auto scroll to bottom
+  try {
+    term.scrollToBottom();
+  } catch (e) {
+    // Fallback: manually scroll to bottom using DOM if xterm.js method fails
+    const viewport = termEl.querySelector('.xterm-viewport');
+    if (viewport) {
+      viewport.scrollTop = viewport.scrollHeight;
+    }
+  }
+
+  // Send to chat terminal if in chat mode
+  if (state.useChatMode && chatTerm) {
+    console.log('[DEBUG] Sending data to chat terminal');
+    chatTerm.handleTerminalOutput(data);
   }
 }
 
@@ -360,6 +502,17 @@ window.addEventListener('keydown', (e) => {
       nextIdx = currentIdx === state.tabs.length - 1 ? 0 : currentIdx + 1;
     }
     if (state.tabs[nextIdx]) setActiveTab(state.tabs[nextIdx].id);
+    return;
+  }
+
+  // Ctrl+1, Ctrl+2, Ctrl+3... : Switch to specific tab (1-9)
+  // Cmd+1, Cmd+2, Cmd+3... on Mac
+  if (ctrlOrCmd && /^[1-9]$/.test(e.key) && !inInput) {
+    e.preventDefault();
+    const tabIndex = parseInt(e.key, 10) - 1;
+    if (state.tabs[tabIndex]) {
+      setActiveTab(state.tabs[tabIndex].id);
+    }
     return;
   }
 
@@ -521,6 +674,40 @@ function normalizePath(base, name) {
   return (b + sep + name).replace(/[\\/]+/g, sep);
 }
 
+// Extract directory name from path (similar to basename in Unix)
+function getDirName(path) {
+  if (!path) return '';
+
+  // Remove trailing slashes
+  path = path.replace(/[\\/]+$/, '');
+
+  // Handle root directory cases
+  if (path === '/' || path === '' || /^[A-Za-z]:\\?$/.test(path)) {
+    return path === '/' ? '/' : (path || '~');
+  }
+
+  // Split path and get last component
+  const parts = path.split(/[\\/]+/);
+  return parts[parts.length - 1] || '~';
+}
+
+// Function to get current directory name for active tab
+function getCurrentDirName() {
+  const activeTab = state.tabs.find(t => t.id === state.activeId);
+  if (activeTab && activeTab.cwd) {
+    return getDirName(activeTab.cwd);
+  }
+  return '~';
+}
+
+// Function to update the current path display with just the directory name
+function updateCurrentPathDisplay() {
+  const currentPath = document.getElementById('currentPath');
+  if (currentPath) {
+    currentPath.textContent = getCurrentDirName();
+  }
+}
+
 function parentPath(p) {
   const isWin = p.includes('\\');
   const parts = p.split(isWin ? /\\+/ : /\/+/, );
@@ -531,38 +718,8 @@ function parentPath(p) {
   return joined;
 }
 
-function onRowOpen(row) {
-  const t = state.tabs.find(x => x.id === state.activeId); if (!t) return;
-  if (row.type === 'dir') {
-    const next = normalizePath(t.cwd, row.name);
-    t.cwd = next; cwdLabel.textContent = next; refreshFiles();
-    // attempt to cd in shell for consistency
-    t.write && t.write(`cd ${JSON.stringify(next)}\r`);
-    setTimeout(()=> t.write && t.write('printf "\nSM_CWD:%s\n" "$PWD"\r'), 10);
-  }
-}
 
-// Drag-drop upload
-fileTbody.addEventListener('dragover', (e)=>{ e.preventDefault(); });
-fileTbody.addEventListener('drop', async (e)=>{
-  e.preventDefault();
-  const t = state.tabs.find(x => x.id === state.activeId); if (!t || t.type !== 'ssh') return;
-  const items = e.dataTransfer && e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
-  for (const f of items) {
-    if (!f.path) continue;
-    const name = f.path.split(/\\\\|\//).pop();
-    const remotePath = normalizePath(t.cwd, name);
-    await sm.tx.enqueue({ kind:'upload', connId: t.connId, localPath: f.path, remotePath, policy:'rename' });
-  }
-  toggleTx(true); refreshTransfers();
-});
 
-function onRowSelect(row, e) {
-  const name = row.dataset.name; const key = name;
-  if (!e.ctrlKey && !e.metaKey) { selection.clear(); Array.from(fileTbody.children).forEach(c=> c.classList.remove('selected')); }
-  if (selection.has(key)) { selection.delete(key); row.classList.remove('selected'); }
-  else { selection.add(key); row.classList.add('selected'); }
-}
 
 // Download button
 const downloadBtn = { click: async () => {
@@ -750,22 +907,6 @@ sshKeyBrowse.onclick = async () => {
   if (ret.ok && ret.data && ret.data[0]) sshKeyPath.value = ret.data[0];
 };
 
-// Terminal mode toggle
-const terminalModeToggle = document.getElementById('terminalModeToggle');
-const terminalModeIcon = document.getElementById('terminalModeIcon');
-
-if (terminalModeToggle) {
-  terminalModeToggle.onclick = () => {
-    state.useChatMode = !state.useChatMode;
-    terminalModeIcon.textContent = state.useChatMode ? '🖥️' : '💬';
-    terminalModeToggle.title = state.useChatMode ? 'Switch to Classic Terminal' : 'Switch to Chat Terminal';
-
-    // Switch active tab's display mode
-    if (state.activeId) {
-      setActiveTab(state.activeId);
-    }
-  };
-}
 
 // Update connection status indicator
 function updateConnectionStatus(type, label) {
@@ -787,146 +928,7 @@ function updateConnectionStatus(type, label) {
   }
 }
 
-// File Panel Toggle
-function setupFilePanelToggle() {
-  const toggleBtn = document.getElementById('filePanelToggle');
-  const splitEl = document.getElementById('split');
 
-  if (!toggleBtn) return;
-
-  // Apply initial state
-  if (state.filePanelCollapsed) {
-    splitEl.classList.add('file-panel-collapsed');
-    toggleBtn.classList.add('collapsed');
-  }
-
-  toggleBtn.onclick = () => {
-    state.filePanelCollapsed = !state.filePanelCollapsed;
-
-    if (state.filePanelCollapsed) {
-      // Collapse: save current ratio and collapse
-      state.filePanelPreviousRatio = state.splitRatio;
-      splitEl.classList.add('file-panel-collapsed');
-      toggleBtn.classList.add('collapsed');
-    } else {
-      // Expand: restore previous ratio
-      state.splitRatio = state.filePanelPreviousRatio || 0.6;
-      splitEl.classList.remove('file-panel-collapsed');
-      toggleBtn.classList.remove('collapsed');
-      applySplitRatio();
-      fitTerminalToPane();
-    }
-
-    // Save state
-    sm.settings.set({
-      filePanelCollapsed: state.filePanelCollapsed,
-      splitRatio: state.splitRatio
-    });
-  };
-}
-
-// ============ File Operations ============
-const fileContextMenu = document.getElementById('fileContextMenu');
-let contextMenuTarget = null;
-
-// Show context menu
-fileTbody.addEventListener('contextmenu', (e) => {
-  e.preventDefault();
-  const row = e.target.closest('.file-row') || e.target.closest('[data-name]');
-  if (!row) return;
-
-  contextMenuTarget = {
-    name: row.dataset.name,
-    type: row.dataset.type
-  };
-
-  // Position menu at cursor
-  fileContextMenu.style.left = `${e.clientX}px`;
-  fileContextMenu.style.top = `${e.clientY}px`;
-  fileContextMenu.classList.remove('hidden');
-});
-
-// Hide context menu on click outside
-document.addEventListener('click', () => {
-  fileContextMenu.classList.add('hidden');
-});
-
-// Handle context menu actions
-fileContextMenu.addEventListener('click', async (e) => {
-  const item = e.target.closest('.context-menu-item');
-  if (!item || !contextMenuTarget) return;
-
-  const action = item.dataset.action;
-  const t = state.tabs.find(x => x.id === state.activeId);
-  if (!t) return;
-
-  const fullPath = normalizePath(t.cwd, contextMenuTarget.name);
-  const isSSH = t.type === 'ssh';
-
-  try {
-    switch (action) {
-      case 'rename': {
-        const newName = prompt('Enter new name:', contextMenuTarget.name);
-        if (!newName || newName === contextMenuTarget.name) break;
-        const newPath = normalizePath(t.cwd, newName);
-        const res = isSSH
-          ? await sm.ssh.rename({ connId: t.connId, oldPath: fullPath, newPath })
-          : await sm.fs.rename({ oldPath: fullPath, newPath });
-        if (!res.ok) alert(`Rename failed: ${res.error}`);
-        else refreshFiles();
-        break;
-      }
-      case 'delete': {
-        const confirm = window.confirm(`Delete "${contextMenuTarget.name}"?`);
-        if (!confirm) break;
-        const res = isSSH
-          ? await sm.ssh.delete({ connId: t.connId, path: fullPath, isDir: contextMenuTarget.type === 'dir' })
-          : await sm.fs.delete({ path: fullPath });
-        if (!res.ok) alert(`Delete failed: ${res.error}`);
-        else refreshFiles();
-        break;
-      }
-      case 'newFolder': {
-        const name = prompt('Enter folder name:');
-        if (!name) break;
-        const path = normalizePath(t.cwd, name);
-        const res = isSSH
-          ? await sm.ssh.mkdir({ connId: t.connId, path })
-          : await sm.fs.mkdir({ path });
-        if (!res.ok) alert(`Create folder failed: ${res.error}`);
-        else refreshFiles();
-        break;
-      }
-      case 'newFile': {
-        const name = prompt('Enter file name:');
-        if (!name) break;
-        const path = normalizePath(t.cwd, name);
-        const res = isSSH
-          ? await sm.ssh.createFile({ connId: t.connId, path })
-          : await sm.fs.createFile({ path });
-        if (!res.ok) alert(`Create file failed: ${res.error}`);
-        else refreshFiles();
-        break;
-      }
-      case 'copyPath': {
-        try {
-          await navigator.clipboard.writeText(fullPath);
-        } catch {
-          prompt('Copy path:', fullPath);
-        }
-        break;
-      }
-      case 'refresh': {
-        refreshFiles();
-        break;
-      }
-    }
-  } catch (error) {
-    alert(`Operation failed: ${error.message}`);
-  }
-
-  fileContextMenu.classList.add('hidden');
-});
 
 
 // ============ Command Palette ============
@@ -939,36 +941,34 @@ commandPalette.registerCommands([
   { id: 'newTab', icon: '📄', name: 'New Tab', description: 'Open a new local terminal tab', shortcut: 'Ctrl+T', tags: ['terminal'], action: () => addNewTab('local') },
   { id: 'closeTab', icon: '✕', name: 'Close Tab', description: 'Close current tab', shortcut: 'Ctrl+W', tags: ['terminal'], action: () => { if (state.activeId) closeTab(state.activeId); } },
   { id: 'sshConnect', icon: '🔐', name: 'SSH Connect', description: 'Connect to a remote server via SSH', shortcut: 'Ctrl+Shift+C', tags: ['ssh', 'connect'], action: () => { connectModal.classList.remove('hidden'); setTimeout(() => sshHost.focus(), 100); } },
-  { id: 'refreshFiles', icon: '🔄', name: 'Refresh Files', description: 'Refresh file explorer', shortcut: 'F5', tags: ['files'], action: refreshFiles },
-  { id: 'newFolder', icon: '📁', name: 'New Folder', description: 'Create a new folder in current directory', tags: ['files', 'create'], action: () => { document.querySelector('[data-action="newFolder"]')?.click(); } },
-  { id: 'newFile', icon: '📝', name: 'New File', description: 'Create a new file in current directory', tags: ['files', 'create'], action: () => { document.querySelector('[data-action="newFile"]')?.click(); } },
-  { id: 'clearTerminal', icon: '🧹', name: 'Clear Terminal', description: 'Clear terminal screen', shortcut: 'Ctrl+L', tags: ['terminal'], action: () => { const t = state.tabs.find(x => x.id === state.activeId); if (t && t.write) t.write('clear\r'); } },
-  { id: 'toggleFilePanel', icon: '📂', name: 'Toggle File Panel', description: 'Show/hide file explorer panel', tags: ['ui'], action: () => { document.getElementById('filePanelToggle')?.click(); } },
-  { id: 'showShortcuts', icon: '⌨️', name: 'Keyboard Shortcuts', description: 'Show all keyboard shortcuts', shortcut: 'F1', tags: ['help'], action: () => { shortcutsModal.classList.remove('hidden'); } },
-  { id: 'switchTerminalMode', icon: '💬', name: 'Toggle Terminal Mode', description: 'Switch between chat and classic terminal', tags: ['terminal', 'ui'], action: () => { document.getElementById('terminalModeToggle')?.click(); } }
+  { id: 'clearTerminal', icon: '🧹', name: 'Clear Terminal', description: 'Clear terminal screen', shortcut: 'Ctrl+L', tags: ['terminal'], action: () => { const t = state.tabs.find(x => x.id === state.activeId); if (t && t.write) t.write('clear\r'); } }
 ]);
-
-// ============ Keyboard Shortcuts Help ============
-const shortcutsModal = document.getElementById('shortcutsModal');
-const shortcutsClose = document.getElementById('shortcutsClose');
-
-if (shortcutsClose) {
-  shortcutsClose.onclick = () => {
-    shortcutsModal.classList.add('hidden');
-  };
-}
-
-shortcutsModal.addEventListener('click', (e) => {
-  if (e.target === shortcutsModal || e.target.classList.contains('modal-backdrop')) {
-    shortcutsModal.classList.add('hidden');
-  }
-});
 
 // Add shortcuts to keyboard handler
 window.addEventListener('keydown', (e) => {
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   const ctrlOrCmd = isMac ? e.metaKey : e.ctrlKey;
   const inInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA';
+
+  // Ctrl+C: Copy selected text (when text is selected)
+  if (e.ctrlKey && e.key === 'c') {
+    const selectedText = window.getSelection().toString();
+    if (selectedText) {
+      e.preventDefault();
+      copySelectedText();
+      return;
+    }
+  }
+
+  // Ctrl+A: Select all text in chat
+  if (e.ctrlKey && e.key === 'a') {
+    // Only trigger select all if we're in the chat area
+    if (chatContainer.contains(e.target) && !inInput) {
+      e.preventDefault();
+      selectAllText();
+      return;
+    }
+  }
 
   // Ctrl/Cmd+K: Command Palette
   if (ctrlOrCmd && e.key === 'k' && !inInput) {
@@ -977,22 +977,10 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
-  // F1: Keyboard Shortcuts
-  if (e.key === 'F1' && !inInput) {
-    e.preventDefault();
-    shortcutsModal.classList.remove('hidden');
-    return;
-  }
-
-  // ESC: Close command palette and shortcuts
+  // ESC: Close command palette
   if (e.key === 'Escape') {
     if (!commandPalette.modal.classList.contains('hidden')) {
       commandPalette.hide();
-      e.preventDefault();
-      return;
-    }
-    if (!shortcutsModal.classList.contains('hidden')) {
-      shortcutsModal.classList.add('hidden');
       e.preventDefault();
       return;
     }
