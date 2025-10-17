@@ -231,7 +231,7 @@ async function addNewTab(type, ssh = null) {
   });
 
   const home = type === 'ssh' ? '/' : await detectHome();
-  const initialTitle = type === 'ssh' ? (ssh.label || ssh.host || getDirName(home)) : getDirName(home);
+  const initialTitle = type === 'ssh' ? (ssh.label || ssh.host || '~') : '~';
   state.tabs.push({
     id,
     title: initialTitle,
@@ -256,11 +256,16 @@ async function addNewTab(type, ssh = null) {
       console.warn('Failed to send CWD probe:', e);
     }
   }, 100);
+
+  // Update current path display immediately to show placeholder
+  updateCurrentPathDisplay();
 }
 
 async function detectHome() {
   // Detect platform using navigator (browser-safe)
   const isWindows = navigator.platform.toLowerCase().includes('win');
+  // For Unix-like systems, we don't know the actual home directory yet
+  // We'll let the shell tell us the current directory
   return isWindows ? 'C:/' : '/';
 }
 
