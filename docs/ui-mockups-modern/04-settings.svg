@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
+  <style>
+    .bg{fill:#F7F8FA}
+    .panel{fill:#FFFFFF;stroke:#E6EAF0}
+    .nav{fill:#FFFFFF;stroke:#E6EAF0}
+    .txt{fill:#0B1220;font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .mut{fill:#5B6475;font:12px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  </style>
+  <rect class="bg" width="1200" height="800"/>
+  <rect class="nav" x="24" y="24" width="280" height="752" rx="12"/>
+  <text class="txt" x="40" y="64">Settings</text>
+  <text class="txt" x="40" y="100">Appearance</text>
+  <text class="txt" x="40" y="132">Terminal</text>
+  <text class="txt" x="40" y="164">Connections</text>
+  <text class="txt" x="40" y="196">Transfers</text>
+  <text class="txt" x="40" y="228">Layout</text>
+
+  <rect class="panel" x="324" y="24" width="852" height="752" rx="12"/>
+  <text class="txt" x="344" y="64">Connections</text>
+  <text class="mut" x="344" y="88">KnownHosts, Agent forwarding, KeepAlive</text>
+
+  <text class="txt" x="344" y="132">KnownHosts Policy</text>
+  <rect class="panel" x="344" y="146" width="320" height="36" rx="8"/>
+  <text class="mut" x="356" y="169">Strict</text>
+
+  <text class="txt" x="344" y="208">Forward Agent by default</text>
+  <rect class="panel" x="590" y="192" width="48" height="28" rx="14"/>
+  <rect x="614" y="196" width="24" height="20" rx="10" fill="#2563EB"/>
+
+  <text class="txt" x="344" y="256">KeepAlive Interval (sec)</text>
+  <rect class="panel" x="344" y="270" width="120" height="36" rx="8"/>
+  <text class="mut" x="356" y="293">20</text>
+
+  <text class="txt" x="344" y="324">Transfer Concurrency</text>
+  <rect class="panel" x="344" y="338" width="120" height="36" rx="8"/>
+  <text class="mut" x="356" y="361">3</text>
+  <text class="txt" x="484" y="361">Adaptive</text>
+  <rect class="panel" x="560" y="346" width="20" height="20" rx="4"/>
+  <rect x="562" y="348" width="16" height="16" rx="2" fill="#2563EB"/>
+</svg>

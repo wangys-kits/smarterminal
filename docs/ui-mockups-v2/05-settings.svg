@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <style>
+    .bg { fill:#FAFBFC }
+    .nav { fill:#FFFFFF; stroke:#E6E9EF }
+    .panel { fill:#FFFFFF; stroke:#E6E9EF }
+    .title { fill:#0B1220; font:18px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+    .text { fill:#0B1220; font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+    .muted { fill:#5B6475; font:13px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+    .input { fill:#FFFFFF; stroke:#E6E9EF }
+    .badge { fill:#EEF2FF; }
+  </style>
+  <rect class="bg" width="1440" height="900"/>
+  <g transform="translate(16,16)">
+    <rect class="nav" x="0" y="0" width="280" height="868" rx="10"/>
+    <text class="title" x="20" y="44">Settings</text>
+    <text class="text" x="20" y="88">Appearance</text>
+    <text class="text" x="20" y="120">Terminal</text>
+    <text class="text" x="20" y="152">Connections</text>
+    <text class="text" x="20" y="184">Transfers</text>
+    <text class="text" x="20" y="216">Layout</text>
+    <text class="text" x="20" y="248">Updates & Privacy</text>
+
+    <g transform="translate(312,0)">
+      <rect class="panel" x="0" y="0" width="1112" height="868" rx="10"/>
+      <text class="title" x="20" y="44">Connections</text>
+      <text class="muted" x="20" y="70">KnownHosts, Agent forwarding, KeepAlive</text>
+
+      <text class="text" x="20" y="120">KnownHosts Policy</text>
+      <rect class="input" x="20" y="134" width="320" height="36" rx="8"/>
+      <text class="muted" x="32" y="157">Strict</text>
+
+      <text class="text" x="20" y="200">Forward Agent by default</text>
+      <rect class="input" x="260" y="182" width="48" height="28" rx="14"/>
+      <rect x="284" y="186" width="24" height="20" rx="10" fill="#2563EB"/>
+
+      <text class="text" x="20" y="250">KeepAlive Interval (sec)</text>
+      <rect class="input" x="20" y="264" width="120" height="36" rx="8"/>
+      <text class="muted" x="32" y="287">20</text>
+
+      <text class="text" x="20" y="330">Transfer Concurrency</text>
+      <rect class="input" x="20" y="344" width="120" height="36" rx="8"/>
+      <text class="muted" x="32" y="367">3</text>
+      <text class="text" x="160" y="367">Adaptive</text>
+      <rect class="input" x="232" y="350" width="20" height="20" rx="4"/>
+      <rect x="234" y="352" width="16" height="16" rx="2" fill="#2563EB"/>
+
+      <rect class="badge" x="20" y="404" width="160" height="24" rx="12"/>
+      <text class="muted" x="28" y="421">Restart required</text>
+    </g>
+  </g>
+</svg>

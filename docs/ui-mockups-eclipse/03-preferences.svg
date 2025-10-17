@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
+  <style>
+    .bg{fill:#FFFFFF}
+    .panel{fill:#FFFFFF;stroke:#D7DDE8}
+    .nav{fill:#F3F4F6;stroke:#D7DDE8}
+    .text{fill:#1B2330;font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .muted{fill:#5B6475;font:12px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .input{fill:#FFFFFF;stroke:#D7DDE8}
+  </style>
+  <rect class="bg" width="1200" height="800"/>
+  <rect class="nav" x="24" y="24" width="280" height="752" rx="6"/>
+  <text class="text" x="40" y="56">Preferences</text>
+  <text class="text" x="40" y="96">General</text>
+  <text class="text" x="40" y="126">Appearance</text>
+  <text class="text" x="40" y="156">Terminal</text>
+  <text class="text" x="40" y="186">Connections</text>
+  <text class="text" x="40" y="216">Transfers</text>
+
+  <rect class="panel" x="320" y="24" width="856" height="752" rx="6"/>
+  <text class="text" x="340" y="56">Connections</text>
+  <text class="muted" x="340" y="80">KnownHosts policy, Agent forwarding, KeepAlive</text>
+
+  <text class="text" x="340" y="126">KnownHosts Policy</text>
+  <rect class="input" x="340" y="140" width="320" height="32" rx="6"/>
+  <text class="muted" x="352" y="162">Strict</text>
+
+  <text class="text" x="340" y="200">Forward Agent by default</text>
+  <rect class="input" x="600" y="184" width="48" height="28" rx="14"/>
+  <rect x="624" y="188" width="24" height="20" rx="10" fill="#3272D9"/>
+
+  <text class="text" x="340" y="248">KeepAlive Interval (sec)</text>
+  <rect class="input" x="340" y="262" width="120" height="32" rx="6"/>
+  <text class="muted" x="352" y="284">20</text>
+
+  <text class="text" x="340" y="320">Transfer Concurrency</text>
+  <rect class="input" x="340" y="334" width="120" height="32" rx="6"/>
+  <text class="muted" x="352" y="356">3</text>
+  <text class="text" x="480" y="356">Adaptive</text>
+  <rect class="input" x="560" y="340" width="20" height="20" rx="4"/>
+  <rect x="562" y="342" width="16" height="16" rx="2" fill="#3272D9"/>
+</svg>

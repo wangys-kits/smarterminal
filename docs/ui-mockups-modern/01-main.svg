@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <defs>
+    <linearGradient id="brand" x1="0" x2="1"><stop offset="0%" stop-color="#2563EB"/><stop offset="100%" stop-color="#7C3AED"/></linearGradient>
+    <style>
+      .bg{fill:#F7F8FA}
+      .bar{fill:#FFFFFF}
+      .txt{fill:#0B1220;font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+      .mut{fill:#5B6475;font:13px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+      .mono{fill:#E8ECF2;font:13px 'Fira Code',Consolas,Menlo,monospace}
+      .card{fill:#FFFFFF;stroke:#E6EAF0}
+      .ghost{fill:#FFFFFF;stroke:#E6EAF0}
+    </style>
+  </defs>
+  <rect class="bg" width="1440" height="900"/>
+  <!-- App bar -->
+  <g transform="translate(0,0)">
+    <rect class="bar" x="0" y="0" width="1440" height="56"/>
+    <text class="txt" x="16" y="34">Smarterminal</text>
+    <rect class="ghost" x="1348" y="12" width="80" height="32" rx="8"/>
+    <text class="mut" x="1368" y="32">Settings</text>
+  </g>
+  <!-- Tabs -->
+  <g transform="translate(16,64)">
+    <g>
+      <rect x="0" y="0" width="220" height="32" rx="6" fill="#FFFFFF" stroke="#E6EAF0"/>
+      <text class="txt" x="12" y="21">dev • SSH</text>
+      <line x1="0" y1="34" x2="220" y2="34" stroke="url(#brand)" stroke-width="2"/>
+    </g>
+    <g>
+      <rect x="236" y="0" width="160" height="32" rx="6" fill="#FFFFFF" stroke="#E6EAF0" opacity=".85"/>
+      <text class="mut" x="248" y="21">local • zsh</text>
+    </g>
+  </g>
+  <!-- Terminal -->
+  <g transform="translate(16,104)">
+    <rect x="0" y="0" width="1408" height="500" rx="12" fill="#0B1220"/>
+    <g transform="translate(12,12)">
+      <rect class="ghost" x="0" y="0" width="64" height="26" rx="8"/>
+      <text class="mut" x="12" y="18">Find</text>
+      <rect class="ghost" x="72" y="0" width="64" height="26" rx="8"/>
+      <text class="mut" x="84" y="18">Copy</text>
+      <rect class="ghost" x="144" y="0" width="72" height="26" rx="8"/>
+      <text class="mut" x="156" y="18">Paste</text>
+    </g>
+    <g transform="translate(16,56)">
+      <text class="mono" x="0" y="0">user@dev:~$ ssh prod</text>
+      <text class="mono" x="0" y="24">Last login: Fri</text>
+      <text class="mono" x="0" y="48">user@prod:~$</text>
+    </g>
+  </g>
+  <!-- Splitter -->
+  <g transform="translate(0,616)"><rect x="0" y="0" width="1440" height="2" fill="#E6EAF0"/></g>
+  <!-- Files -->
+  <g transform="translate(16,626)">
+    <rect class="card" x="0.5" y="0.5" width="1407" height="258" rx="12"/>
+    <g transform="translate(16,16)">
+      <rect x="0" y="0" width="260" height="28" rx="14" fill="#F2F4F7" stroke="#E6EAF0"/>
+      <text class="mut" x="12" y="19">home › user › app</text>
+      <rect x="280" y="0" width="520" height="28" rx="8" fill="#FFFFFF" stroke="#E6EAF0"/>
+      <text class="mut" x="292" y="19">/home/user/app</text>
+      <rect class="ghost" x="1210" y="0" width="80" height="28" rx="8"/>
+      <text class="mut" x="1226" y="19">Upload</text>
+      <rect class="ghost" x="1298" y="0" width="80" height="28" rx="8"/>
+      <text class="mut" x="1316" y="19">Refresh</text>
+    </g>
+    <g transform="translate(0,60)">
+      <rect fill="#F8FAFC" x="0" y="0" width="1408" height="32"/>
+      <text class="mut" x="24" y="21">Name</text>
+      <text class="mut" x="700" y="21">Size</text>
+      <text class="mut" x="840" y="21">Modified</text>
+      <text class="mut" x="1060" y="21">Type</text>
+    </g>
+    <g transform="translate(0,92)">
+      <rect fill="#FFFFFF" x="0" y="0" width="1408" height="32"/>
+      <text class="txt" x="24" y="21">src/</text>
+      <text class="mut" x="700" y="21">—</text>
+      <text class="txt" x="840" y="21">2025-10-17 09:12</text>
+      <rect fill="#F9FAFB" x="0" y="32" width="1408" height="32"/>
+      <text class="txt" x="24" y="53">README.md</text>
+      <text class="txt" x="700" y="53">4.0 KB</text>
+      <text class="txt" x="840" y="53">2025-10-16 20:00</text>
+    </g>
+  </g>
+  <!-- Status strip -->
+  <g transform="translate(0,884)"><rect x="0" y="0" width="1440" height="16" fill="#FFFFFF"/><text class="mut" x="12" y="13">dev • UTF‑8 • 120×40 • 1 transfer</text></g>
+</svg>

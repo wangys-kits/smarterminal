@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <defs>
+    <linearGradient id="acc" x1="0" x2="1">
+      <stop offset="0%" stop-color="#6D28D9"/>
+      <stop offset="100%" stop-color="#22D3EE"/>
+    </linearGradient>
+    <style>
+      .bg { fill:#F9FAFB }
+      .surface { fill:#FFFFFF }
+      .muted { fill:#5B6475; font:13px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+      .text { fill:#0B1220; font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+      .mono { fill:#E8ECF2; font:13px 'Fira Code',Consolas,Menlo,monospace }
+      .ghost { fill:#FFFFFF; stroke:#E5E7EB }
+    </style>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1440" height="900"/>
+
+  <!-- Tabs -->
+  <g transform="translate(16,12)">
+    <rect x="0" y="0" width="220" height="36" rx="6" fill="#FFFFFF" stroke="#E5E7EB"/>
+    <text class="text" x="12" y="23">dev • SSH</text>
+    <line x1="0" y1="38" x2="220" y2="38" stroke="url(#acc)" stroke-width="2"/>
+    <rect x="236" y="0" width="160" height="36" rx="6" fill="#FFFFFF" stroke="#E5E7EB" opacity=".85"/>
+    <text class="muted" x="248" y="23">local • zsh</text>
+    <rect x="404" y="0" width="200" height="36" rx="6" fill="#FFFFFF" stroke="#E5E7EB" opacity=".85"/>
+    <text class="muted" x="416" y="23">db-prod • SSH</text>
+    <rect class="ghost" x="1408" y="0" width="32" height="32" rx="8"/>
+    <text class="muted" x="1418" y="22">+</text>
+  </g>
+
+  <!-- Terminal (dark hero) -->
+  <g transform="translate(16,64)">
+    <rect x="0" y="0" width="1408" height="500" rx="12" fill="#0B1220"/>
+    <!-- Ghost toolbar -->
+    <g transform="translate(12,12)">
+      <rect class="ghost" x="0" y="0" width="64" height="26" rx="8"/>
+      <text class="muted" x="12" y="18">Find</text>
+      <rect class="ghost" x="72" y="0" width="64" height="26" rx="8"/>
+      <text class="muted" x="84" y="18">Copy</text>
+      <rect class="ghost" x="144" y="0" width="72" height="26" rx="8"/>
+      <text class="muted" x="156" y="18">Paste</text>
+    </g>
+    <!-- Terminal text -->
+    <g transform="translate(16,56)">
+      <text class="mono" x="0" y="0">user@dev:~$ git pull</text>
+      <text class="mono" x="0" y="24">Already up to date.</text>
+      <text class="mono" x="0" y="48">user@dev:~/app$</text>
+    </g>
+  </g>
+
+  <!-- Splitter (glass handle) -->
+  <g transform="translate(0,576)">
+    <rect x="0" y="0" width="1440" height="2" fill="#E5E7EB"/>
+    <g transform="translate(708,-8)">
+      <rect x="0" y="0" width="28" height="16" rx="10" fill="#FFFFFF" stroke="#E5E7EB"/>
+      <circle cx="8" cy="8" r="1.5" fill="#A8B0BF"/>
+      <circle cx="14" cy="8" r="1.5" fill="#A8B0BF"/>
+      <circle cx="20" cy="8" r="1.5" fill="#A8B0BF"/>
+    </g>
+  </g>
+
+  <!-- File pane with breadcrumb chips and editable path -->
+  <g transform="translate(16,596)">
+    <rect x="0" y="0" width="1408" height="288" rx="12" fill="#FFFFFF" stroke="#E5E7EB"/>
+    <g transform="translate(16,16)">
+      <rect x="0" y="0" width="260" height="28" rx="14" fill="#F3F4F6" stroke="#E5E7EB"/>
+      <text class="muted" x="12" y="19">home › user › app</text>
+      <rect x="280" y="0" width="520" height="28" rx="8" fill="#FFFFFF" stroke="#E5E7EB"/>
+      <text class="muted" x="292" y="19">/home/user/app</text>
+      <rect x="1230" y="0" width="90" height="28" rx="14" fill="#EEF2FF"/>
+      <text class="text" x="1254" y="19">Remote</text>
+      <rect class="ghost" x="1126" y="0" width="90" height="28" rx="8"/>
+      <text class="muted" x="1144" y="19">Upload</text>
+      <rect class="ghost" x="1026" y="0" width="90" height="28" rx="8"/>
+      <text class="muted" x="1046" y="19">Refresh</text>
+    </g>
+    <!-- Header row -->
+    <g transform="translate(0,60)">
+      <rect fill="#F8FAFC" x="0" y="0" width="1408" height="32"/>
+      <text class="muted" x="24" y="21">Name</text>
+      <text class="muted" x="700" y="21">Size</text>
+      <text class="muted" x="840" y="21">Modified</text>
+      <text class="muted" x="1060" y="21">Type</text>
+      <text class="muted" x="1180" y="21">Perm</text>
+    </g>
+    <!-- Rows -->
+    <g transform="translate(0,92)">
+      <rect fill="#FFFFFF" x="0" y="0" width="1408" height="32"/>
+      <text class="text" x="24" y="21">src/</text>
+      <text class="muted" x="700" y="21">—</text>
+      <text class="text" x="840" y="21">2025-10-17 09:12</text>
+      <text class="text" x="1060" y="21">dir</text>
+      <text class="text" x="1180" y="21">rwxr-xr-x</text>
+
+      <rect fill="#F9FAFB" x="0" y="32" width="1408" height="32"/>
+      <text class="text" x="24" y="53">README.md</text>
+      <text class="text" x="700" y="53">4.0 KB</text>
+      <text class="text" x="840" y="53">2025-10-16 20:00</text>
+      <text class="text" x="1060" y="53">file</text>
+      <text class="text" x="1180" y="53">rw-r--r--</text>
+    </g>
+  </g>
+
+  <!-- Toast (neon) -->
+  <g transform="translate(1040,800)">
+    <rect x="0" y="0" width="360" height="72" rx="10" fill="#0B1220" opacity="0.9"/>
+    <text x="16" y="30" fill="#FFFFFF" font-family="-apple-system,Segoe UI,Roboto,Arial,sans-serif" font-size="14">Switch to dev:/home/user/app?</text>
+    <text x="16" y="50" fill="#A8B0BF" font-family="-apple-system,Segoe UI,Roboto,Arial,sans-serif" font-size="12">Switch   Always   Never</text>
+  </g>
+</svg>

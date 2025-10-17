@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360">
+  <style>
+    .panel{fill:#FFFFFF;stroke:#E6EAF0}
+    .txt{fill:#0B1220;font:16px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .mut{fill:#5B6475;font:13px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .btn{fill:#FFFFFF;stroke:#E6EAF0}
+  </style>
+  <rect class="panel" x="24" y="24" width="1152" height="312" rx="12"/>
+  <text class="txt" x="60" y="120">This folder is empty</text>
+  <text class="mut" x="60" y="148">Drag and drop files here, or use the Upload button.</text>
+  <rect class="btn" x="60" y="176" width="120" height="36" rx="8"/>
+  <text class="mut" x="92" y="199">Upload</text>
+  <rect class="btn" x="188" y="176" width="160" height="36" rx="8"/>
+  <text class="mut" x="216" y="199">New Folder</text>
+</svg>

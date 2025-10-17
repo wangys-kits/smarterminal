@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <style>
+    .dim { fill:#000; opacity:.45 }
+    .dlg { fill:#FFFFFF; stroke:#E5E7EB }
+    .title { fill:#0B1220; font:18px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+    .text { fill:#0B1220; font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+    .muted { fill:#5B6475; font:12px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+    .mono { fill:#0B1220; font:13px Menlo,Consolas,monospace }
+    .btn { fill:#FFFFFF; stroke:#E5E7EB }
+  </style>
+  <rect fill="#0B1220" width="1440" height="900"/>
+  <rect class="dim" x="0" y="0" width="1440" height="900"/>
+  <g transform="translate(320,180)">
+    <rect class="dlg" x="0" y="0" width="800" height="520" rx="12"/>
+    <text class="title" x="24" y="48">File exists</text>
+    <text class="muted" x="24" y="72">Choose how to resolve the conflict for README.md</text>
+
+    <!-- side by side meta -->
+    <g transform="translate(24,96)">
+      <rect x="0" y="0" width="360" height="160" rx="10" fill="#F9FAFB" stroke="#E5E7EB"/>
+      <text class="muted" x="16" y="24">Existing</text>
+      <text class="text" x="16" y="52">README.md</text>
+      <text class="muted" x="16" y="76">4.0 KB • 2025-10-16 20:00</text>
+    </g>
+    <g transform="translate(416,96)">
+      <rect x="0" y="0" width="360" height="160" rx="10" fill="#F9FAFB" stroke="#E5E7EB"/>
+      <text class="muted" x="16" y="24">Incoming</text>
+      <text class="text" x="16" y="52">README.md</text>
+      <text class="muted" x="16" y="76">4.0 KB • 2025-10-17 09:12</text>
+    </g>
+
+    <!-- options -->
+    <g transform="translate(24,272)">
+      <rect class="btn" x="0" y="0" width="752" height="48" rx="8"/>
+      <text class="text" x="16" y="30">Overwrite</text>
+    </g>
+    <g transform="translate(24,328)">
+      <rect class="btn" x="0" y="0" width="752" height="48" rx="8"/>
+      <text class="text" x="16" y="30">Skip</text>
+    </g>
+    <g transform="translate(24,384)">
+      <rect class="btn" x="0" y="0" width="752" height="72" rx="8"/>
+      <text class="text" x="16" y="32">Rename to:</text>
+      <rect x="140" y="12" width="560" height="40" rx="8" fill="#FFFFFF" stroke="#E5E7EB"/>
+      <text class="muted" x="152" y="38">README (2).md</text>
+    </g>
+
+    <g transform="translate(24,468)">
+      <text class="muted" x="0" y="16">Apply to all (3)</text>
+      <rect x="688" y="-8" width="88" height="36" rx="8" fill="#FFFFFF" stroke="#E5E7EB"/>
+      <text class="text" x="706" y="16">Confirm</text>
+    </g>
+  </g>
+</svg>

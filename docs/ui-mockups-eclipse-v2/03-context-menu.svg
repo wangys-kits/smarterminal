@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="360" viewBox="0 0 600 360">
+  <style>
+    .menu{fill:#FFFFFF;stroke:#D7DDE8}
+    .item{fill:#FFFFFF}
+    .itemH{fill:#EEF3FF}
+    .text{fill:#1B2330;font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .muted{fill:#5B6475;font:12px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  </style>
+  <rect class="menu" x="40" y="40" width="280" height="220" rx="6"/>
+  <g transform="translate(40,40)">
+    <rect class="itemH" x="0" y="0" width="280" height="36"/>
+    <text class="text" x="12" y="24">Upload…</text>
+    <rect class="item" x="0" y="36" width="280" height="36"/>
+    <text class="text" x="12" y="60">Download</text>
+    <rect class="item" x="0" y="72" width="280" height="36"/>
+    <text class="text" x="12" y="96">Rename</text>
+    <rect class="item" x="0" y="108" width="280" height="36"/>
+    <text class="text" x="12" y="132">Delete</text>
+    <rect class="item" x="0" y="144" width="280" height="36"/>
+    <text class="text" x="12" y="168">New Folder</text>
+  </g>
+</svg>

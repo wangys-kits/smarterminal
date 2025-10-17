@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <defs>
+    <linearGradient id="acc" x1="0" x2="1"><stop offset="0%" stop-color="#6D28D9"/><stop offset="100%" stop-color="#22D3EE"/></linearGradient>
+    <style>
+      .bg { fill:#0B1220 }
+      .surface { fill:#0F1422 }
+      .text { fill:#E8ECF2; font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+      .muted { fill:#A8B0BF; font:13px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+      .mono { fill:#DDE3ED; font:13px Menlo,Consolas,monospace }
+    </style>
+  </defs>
+  <rect class="bg" width="1440" height="900"/>
+  <g transform="translate(16,72)">
+    <rect class="surface" x="0" y="0" width="1408" height="756" rx="12"/>
+    <g transform="translate(16,16)">
+      <rect x="0" y="0" width="840" height="72" rx="12" fill="#101828" stroke="#1E2638"/>
+      <text class="text" x="16" y="30">Connection lost. Press Enter to reconnect.</text>
+      <text class="muted" x="16" y="54">Error: Network unreachable (E_CONN)</text>
+    </g>
+    <g transform="translate(16,120)">
+      <text class="mono" x="0" y="0">user@prod:~$</text>
+      <text class="mono" x="0" y="24">_</text>
+    </g>
+  </g>
+</svg>

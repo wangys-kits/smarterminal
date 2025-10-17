@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720">
+  <style>
+    .bg{fill:#FFFFFF}
+    .panel{fill:#FFFFFF;stroke:#D7DDE8}
+    .text{fill:#1B2330;font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .muted{fill:#5B6475;font:12px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .menu{fill:#FFFFFF;stroke:#D7DDE8}
+    .item{fill:#FFFFFF}
+    .itemH{fill:#EEF3FF}
+  </style>
+  <rect class="bg" width="1200" height="720"/>
+  <g transform="translate(24,24)">
+    <rect class="panel" x="0" y="0" width="1152" height="672" rx="6"/>
+    <text class="text" x="16" y="28">Files</text>
+    <rect class="menu" x="800" y="40" width="240" height="240" rx="6"/>
+    <g transform="translate(800,40)">
+      <rect class="itemH" x="0" y="0" width="240" height="36"/>
+      <text class="text" x="12" y="24">Upload…</text>
+      <rect class="item" x="0" y="36" width="240" height="36"/>
+      <text class="text" x="12" y="60">Download</text>
+      <rect class="item" x="0" y="72" width="240" height="36"/>
+      <text class="text" x="12" y="96">Rename</text>
+      <rect class="item" x="0" y="108" width="240" height="36"/>
+      <text class="text" x="12" y="132">Delete</text>
+      <rect class="item" x="0" y="144" width="240" height="36"/>
+      <text class="text" x="12" y="168">New Folder</text>
+      <rect class="item" x="0" y="180" width="240" height="36"/>
+      <text class="text" x="12" y="204">Copy Path</text>
+    </g>
+  </g>
+</svg>

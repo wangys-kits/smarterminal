@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; connect-src 'self';" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Smarterminal</title>
+  <link rel="stylesheet" href="../../design-system/modern/tokens.css" />
+  <link rel="stylesheet" href="../../node_modules/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="styles.css" />
+  <!-- Load xterm.js before our module script -->
+  <script src="../../node_modules/xterm/lib/xterm.js"></script>
+</head>
+<body>
+  <!-- Main Toolbar -->
+  <div class="toolbar">
+    <div class="toolbar-left">
+      <div class="app-title">Smarterminal</div>
+      <div class="toolbar-hint">
+        <kbd>Ctrl+Shift+C</kbd> Connect SSH •
+        <kbd>Ctrl+T</kbd> New Tab •
+        <kbd>Ctrl+,</kbd> Settings
+      </div>
+    </div>
+    <div class="toolbar-right">
+      <span class="toolbar-hint" id="globalStatus">Ready</span>
+    </div>
+  </div>
+
+  <!-- Tab Bar -->
+  <div class="tab-bar">
+    <div id="tabs" class="tabs"></div>
+    <div class="tab-bar-hint">
+      <kbd>Ctrl+T</kbd> New Tab •
+      <kbd>Ctrl+W</kbd> Close Tab •
+      <kbd>Ctrl+Tab</kbd> Next Tab
+    </div>
+  </div>
+
+  <!-- Main Content Area -->
+  <div id="split" class="split">
+    <!-- Chat-style Terminal Pane -->
+    <div class="pane pane-terminal">
+      <div class="pane-toolbar">
+        <div class="pane-toolbar-left">
+          <span class="toolbar-hint">Ctrl+L Clear • Ctrl+K Export • Ctrl+F Find</span>
+        </div>
+        <div class="pane-toolbar-right">
+          <button id="terminalModeToggle" class="icon-btn" title="Toggle Terminal Mode (Chat/Classic)">
+            <span id="terminalModeIcon">💬</span>
+          </button>
+          <span class="status-indicator" id="connectionStatus">
+            <span class="status-dot local"></span>
+            <span class="status-text">Local</span>
+          </span>
+        </div>
+      </div>
+
+      <!-- Chat Messages Container -->
+      <div class="chat-container" id="chatContainer">
+        <div class="chat-messages" id="chatMessages">
+          <!-- Welcome message -->
+          <div class="system-message">
+            <div class="message-icon">🚀</div>
+            <div class="message-content">
+              <div class="message-text">Welcome to Smarterminal</div>
+              <div class="message-hint">
+                Type a command below •
+                <kbd>Ctrl+Space</kbd> Suggestions •
+                <kbd>Ctrl+L</kbd> Clear •
+                <kbd>Ctrl+K</kbd> Export
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Traditional xterm.js terminal (temporary, will be replaced) -->
+      <div id="term" class="term-container" style="flex: 1; display: block;"></div>
+
+      <!-- Command Input Area (Fixed at bottom) -->
+      <div class="command-input-wrapper">
+        <div class="command-input-container">
+          <div class="input-prefix">
+            <span class="prompt-symbol">$</span>
+            <span class="current-path" id="currentPath">~</span>
+          </div>
+          <textarea
+            id="commandInput"
+            class="command-input"
+            placeholder="Type a command and press Enter..."
+            rows="1"
+            autocomplete="off"
+            spellcheck="false"
+          ></textarea>
+        </div>
+        <!-- Command Suggestions Dropdown -->
+        <div class="command-suggestions hidden" id="commandSuggestions">
+          <div class="suggestions-header">
+            Suggestions
+            <span class="suggestions-hint">↑↓ Navigate • Enter Select • Esc Close</span>
+          </div>
+          <div class="suggestions-list" id="suggestionsList"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Draggable Divider -->
+    <div id="divider" class="divider" title="Drag to resize"></div>
+
+    <!-- File Explorer Pane -->
+    <div class="pane pane-files">
+      <div class="pane-toolbar">
+        <div class="pane-toolbar-left">
+          <span class="path-breadcrumb">
+            <span id="scopeBadge" class="scope-badge local">Local</span>
+            <span id="cwdLabel" class="path-text">/</span>
+          </span>
+        </div>
+        <div class="pane-toolbar-right">
+          <button id="uploadBtn" class="icon-btn" title="Upload files (SSH only)" style="display:none;">⬆️</button>
+          <span class="toolbar-hint">F5 Refresh • Ctrl+U Upload • Ctrl+D Download</span>
+        </div>
+      </div>
+      <div class="file-explorer">
+        <div class="file-table">
+          <div class="file-table-header">
+            <div class="col-name">Name</div>
+            <div class="col-size">Size</div>
+            <div class="col-modified">Modified</div>
+            <div class="col-type">Type</div>
+          </div>
+          <div class="file-table-body" id="fileTbody"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status Bar -->
+  <div class="statusbar" id="statusbar">
+    <div class="statusbar-left">
+      <div class="statusbar-item" id="statusConnection">
+        <span class="status-dot local"></span>
+        <span>Local Shell</span>
+      </div>
+      <div class="statusbar-item" id="statusPath">~</div>
+    </div>
+    <div class="statusbar-center">
+      <button class="statusbar-toggle" id="filePanelToggle" title="Click to toggle file explorer">
+        <span class="toggle-icon">▲</span>
+        <span class="toggle-label">File Explorer</span>
+      </button>
+    </div>
+    <div class="statusbar-right">
+      <div class="statusbar-item" id="statusTransfers">
+        <span>Transfers: 0</span>
+      </div>
+      <div class="statusbar-item" id="statusEncoding">UTF-8</div>
+    </div>
+  </div>
+
+  <!-- Transfer Drawer -->
+  <div id="txDrawer" class="transfer-drawer hidden">
+    <div class="transfer-drawer-header">
+      <div class="transfer-drawer-title">File Transfers</div>
+      <div class="transfer-drawer-actions">
+        <span id="txCount" class="transfer-count">0 active</span>
+        <button class="icon-btn small" id="txCloseBtn" title="Close">✕</button>
+      </div>
+    </div>
+    <div id="txList" class="transfer-list"></div>
+  </div>
+
+  <!-- SSH Connect Modal -->
+  <div id="connectModal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">SSH Connection</h3>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Host</label>
+          <input id="sshHost" type="text" class="form-input" placeholder="example.com"/>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Port</label>
+            <input id="sshPort" type="number" class="form-input" value="22"/>
+          </div>
+          <div class="form-group" style="flex: 2;">
+            <label class="form-label">Username</label>
+            <input id="sshUser" type="text" class="form-input" placeholder="root"/>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input id="sshPass" type="password" class="form-input" placeholder="Leave empty to use key"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Private Key</label>
+          <div class="input-group">
+            <input id="sshKeyPath" type="text" class="form-input" placeholder="~/.ssh/id_ed25519"/>
+            <button id="sshKeyBrowse" class="btn-secondary" type="button">Browse</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Key Passphrase</label>
+          <input id="sshKeyPass" type="password" class="form-input" placeholder="If key is encrypted"/>
+        </div>
+        <div class="form-group">
+          <label class="form-checkbox">
+            <input id="sshAgentFwd" type="checkbox"/>
+            <span>Forward SSH Agent</span>
+          </label>
+        </div>
+        <div id="sshHint" class="alert alert-warning hidden">
+          <strong>SSH library not available.</strong> Run <code>npm i ssh2</code> then restart.
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="sshCancel" class="btn-secondary" type="button">Cancel</button>
+        <button id="sshConnect" class="btn-primary" type="button">Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Host Key Verification Modal -->
+  <div id="hostkeyModal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog modal-sm">
+      <div class="modal-header">
+        <h3 class="modal-title">Host Key Verification</h3>
+      </div>
+      <div class="modal-body">
+        <p id="hkText" class="text-secondary"></p>
+        <div class="fingerprint-box">
+          <code id="hkFp" class="fingerprint"></code>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="hkCancel" class="btn-secondary" type="button">Cancel</button>
+        <button id="hkOnce" class="btn-secondary" type="button">Trust Once</button>
+        <button id="hkPersist" class="btn-primary" type="button">Trust & Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- File Context Menu -->
+  <div id="fileContextMenu" class="context-menu hidden">
+    <div class="context-menu-item" data-action="rename">
+      <span>Rename</span>
+      <span class="context-menu-shortcut">F2</span>
+    </div>
+    <div class="context-menu-item" data-action="delete">
+      <span>Delete</span>
+      <span class="context-menu-shortcut">Del</span>
+    </div>
+    <div class="context-menu-separator"></div>
+    <div class="context-menu-item" data-action="newFolder">
+      <span>New Folder</span>
+    </div>
+    <div class="context-menu-item" data-action="newFile">
+      <span>New File</span>
+    </div>
+    <div class="context-menu-separator"></div>
+    <div class="context-menu-item" data-action="copyPath">
+      <span>Copy Path</span>
+    </div>
+    <div class="context-menu-item" data-action="refresh">
+      <span>Refresh</span>
+      <span class="context-menu-shortcut">F5</span>
+    </div>
+  </div>
+
+  <!-- Command Palette Modal -->
+  <div id="commandPalette" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog" style="max-width: 600px; margin-top: 10vh;">
+      <div class="command-palette-container">
+        <div class="command-palette-header">
+          <input
+            id="commandPaletteInput"
+            type="text"
+            class="command-palette-input"
+            placeholder="Type a command..."
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
+        <div class="command-palette-results" id="commandPaletteResults">
+          <!-- Results will be populated dynamically -->
+        </div>
+        <div class="command-palette-footer">
+          <span class="palette-hint">↑↓ Navigate • Enter Execute • Esc Close</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keyboard Shortcuts Help Modal -->
+  <div id="shortcutsModal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog" style="max-width: 800px;">
+      <div class="modal-header">
+        <h3 class="modal-title">Keyboard Shortcuts</h3>
+        <button class="icon-btn" id="shortcutsClose" title="Close">✕</button>
+      </div>
+      <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+        <div class="shortcuts-grid">
+          <div class="shortcuts-section">
+            <h4 class="shortcuts-section-title">General</h4>
+            <div class="shortcut-item">
+              <kbd>Ctrl/Cmd+K</kbd>
+              <span>Command Palette</span>
+            </div>
+            <div class="shortcut-item">
+              <kbd>Ctrl/Cmd+,</kbd>
+              <span>Settings</span>
+            </div>
+            <div class="shortcut-item">
+              <kbd>F1</kbd>
+              <span>Show Shortcuts</span>
+            </div>
+          </div>
+
+          <div class="shortcuts-section">
+            <h4 class="shortcuts-section-title">Tabs</h4>
+            <div class="shortcut-item">
+              <kbd>Ctrl/Cmd+T</kbd>
+              <span>New Tab</span>
+            </div>
+            <div class="shortcut-item">
+              <kbd>Ctrl/Cmd+W</kbd>
+              <span>Close Tab</span>
+            </div>
+            <div class="shortcut-item">
+              <kbd>Ctrl+Tab</kbd>
+              <span>Next Tab</span>
+            </div>
+            <div class="shortcut-item">
+              <kbd>Ctrl+Shift+Tab</kbd>
+              <span>Previous Tab</span>
+            </div>
+          </div>
+
+          <div class="shortcuts-section">
+            <h4 class="shortcuts-section-title">SSH</h4>
+            <div class="shortcut-item">
+              <kbd>Ctrl/Cmd+Shift+C</kbd>
+              <span>SSH Connect</span>
+            </div>
+          </div>
+
+          <div class="shortcuts-section">
+            <h4 class="shortcuts-section-title">Terminal</h4>
+            <div class="shortcut-item">
+              <kbd>Ctrl/Cmd+L</kbd>
+              <span>Clear Terminal</span>
+            </div>
+          </div>
+
+          <div class="shortcuts-section">
+            <h4 class="shortcuts-section-title">File Operations</h4>
+            <div class="shortcut-item">
+              <kbd>F5</kbd>
+              <span>Refresh Files</span>
+            </div>
+            <div class="shortcut-item">
+              <kbd>F2</kbd>
+              <span>Rename File</span>
+            </div>
+            <div class="shortcut-item">
+              <kbd>Delete</kbd>
+              <span>Delete File(s)</span>
+            </div>
+            <div class="shortcut-item">
+              <kbd>Ctrl/Cmd+U</kbd>
+              <span>Upload Files (SSH)</span>
+            </div>
+            <div class="shortcut-item">
+              <kbd>Ctrl/Cmd+D</kbd>
+              <span>Download Files (SSH)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- File Conflict Resolution Modal -->
+  <div id="conflictModal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">File Already Exists</h3>
+      </div>
+      <div class="modal-body">
+        <p class="text-secondary" id="conflictText">The file already exists at the destination.</p>
+        <div class="form-group" style="margin-top: var(--space-md);">
+          <label class="form-label">File Name</label>
+          <input id="conflictFileName" type="text" class="form-input" />
+        </div>
+        <div class="alert alert-warning" style="margin-top: var(--space-md);">
+          <strong>Note:</strong> Choosing "Overwrite" will replace the existing file. Use "Rename" to keep both files.
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="conflictCancel" class="btn-secondary" type="button">Cancel</button>
+        <button id="conflictRename" class="btn-secondary" type="button">Rename</button>
+        <button id="conflictOverwrite" class="btn-primary" type="button">Overwrite</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="renderer.mjs"></script>
+</body>
+</html>

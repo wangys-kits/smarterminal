@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <defs>
+    <linearGradient id="acc" x1="0" x2="1"><stop offset="0%" stop-color="#6D28D9"/><stop offset="100%" stop-color="#22D3EE"/></linearGradient>
+    <style>
+      .bg { fill:#0B1220 }
+      .muted { fill:#A8B0BF; font:13px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+      .text { fill:#E8ECF2; font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+      .mono { fill:#DDE3ED; font:13px Menlo,Consolas,monospace }
+    </style>
+  </defs>
+  <rect class="bg" width="1440" height="900"/>
+  <!-- Dim background terminal -->
+  <g transform="translate(16,16)">
+    <rect x="0" y="0" width="1408" height="868" rx="12" fill="#0F1422" stroke="#1E2638"/>
+    <text class="mono" x="24" y="48">user@dev:~$</text>
+  </g>
+  <!-- Command palette (glass) -->
+  <g transform="translate(360,180)">
+    <defs>
+      <filter id="glass"><feGaussianBlur stdDeviation="6"/></filter>
+    </defs>
+    <rect x="0" y="0" width="720" height="480" rx="12" fill="#101828" opacity="0.85" stroke="#1E2638"/>
+    <rect x="16" y="16" width="688" height="40" rx="8" fill="#0F1422" stroke="#1E2638"/>
+    <text class="muted" x="28" y="41">Search commands, hosts, paths…  ⌘K</text>
+
+    <!-- results -->
+    <g transform="translate(16,72)">
+      <rect x="0" y="0" width="688" height="56" rx="8" fill="#0F1422" stroke="#1E2638"/>
+      <text class="text" x="16" y="34">Connect to host: dev-server</text>
+      <text class="muted" x="560" y="34">Enter</text>
+
+      <g transform="translate(0,64)">
+        <rect x="0" y="0" width="688" height="56" rx="8" fill="#0F1422" stroke="#1E2638"/>
+        <text class="text" x="16" y="34">Files: Upload to /home/user/app</text>
+        <text class="muted" x="560" y="34">⇧U</text>
+      </g>
+      <g transform="translate(0,128)">
+        <rect x="0" y="0" width="688" height="56" rx="8" fill="#0F1422" stroke="#1E2638"/>
+        <text class="text" x="16" y="34">Terminal: Find in buffer…</text>
+        <text class="muted" x="560" y="34">⌘F</text>
+      </g>
+      <g transform="translate(0,192)">
+        <rect x="0" y="0" width="688" height="56" rx="8" fill="#0F1422" stroke="#1E2638"/>
+        <text class="text" x="16" y="34">Port forwarding: Add local 8080 → 3000</text>
+        <text class="muted" x="560" y="34">⌥P</text>
+      </g>
+    </g>
+  </g>
+</svg>

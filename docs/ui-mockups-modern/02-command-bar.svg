@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720">
+  <style>
+    .bg{fill:#0B1220}
+    .panel{fill:#111827;stroke:#1F2937}
+    .txt{fill:#E8ECF2;font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .mut{fill:#A8B0BF;font:12px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  </style>
+  <rect class="bg" width="1200" height="720"/>
+  <g transform="translate(240,140)">
+    <rect class="panel" x="0" y="0" width="720" height="440" rx="12"/>
+    <rect x="16" y="16" width="688" height="40" rx="8" fill="#0F172A" stroke="#1F2937"/>
+    <text class="mut" x="28" y="41">Type a command, host, or path…  ⌘K</text>
+    <g transform="translate(16,72)">
+      <rect x="0" y="0" width="688" height="56" rx="8" fill="#0F172A" stroke="#1F2937"/>
+      <text class="txt" x="16" y="34">Connect to: dev-server</text>
+      <text class="mut" x="620" y="34">Enter</text>
+      <g transform="translate(0,64)">
+        <rect x="0" y="0" width="688" height="56" rx="8" fill="#0F172A" stroke="#1F2937"/>
+        <text class="txt" x="16" y="34">Upload to /home/user/app</text>
+        <text class="mut" x="620" y="34">⌘U</text>
+      </g>
+      <g transform="translate(0,128)">
+        <rect x="0" y="0" width="688" height="56" rx="8" fill="#0F172A" stroke="#1F2937"/>
+        <text class="txt" x="16" y="34">Find in terminal…</text>
+        <text class="mut" x="620" y="34">⌘F</text>
+      </g>
+    </g>
+  </g>
+</svg>

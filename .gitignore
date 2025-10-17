@@ -1,0 +1,56 @@
+# macOS metadata
+.DS_Store
+
+# Claude tooling artifacts
+CLAUDE.md
+.claude/
+.playwright-mcp/
+
+# Node.js tooling caches
+node_modules/
+node-cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-debug.log*
+*.tsbuildinfo
+
+# Environment config
+.env
+.env.local
+.env.*
+!.env.example
+
+# Build outputs
+dist/
+out/
+release/
+tmp/
+*.asar
+*.app
+*.AppImage
+*.dmg
+*.deb
+*.exe
+*.msi
+*.nupkg
+*.pkg
+*.rpm
+*.snap
+*.tar.*
+
+# Logs
+logs/
+*.log
+
+# Test artifacts
+coverage/
+.nyc_output/
+
+# OS / Editor files
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~

@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <style>
+    .bg { fill:#FFFFFF }
+    .text { fill:#0B1220; font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+    .muted { fill:#5B6475; font:12px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+    .hdr { fill:#F3F4F6; }
+    .rowA { fill:#FFFFFF }
+    .rowB { fill:#F9FAFB }
+    .bar { fill:#0B1220; opacity:.95 }
+    .btn { fill:#FFFFFF; stroke:#E5E7EB }
+  </style>
+  <rect class="bg" width="1440" height="900"/>
+  <g transform="translate(16,80)">
+    <rect x="0" y="0" width="1408" height="640" rx="12" fill="#FFFFFF" stroke="#E5E7EB"/>
+    <g transform="translate(0,0)">
+      <rect class="hdr" x="0" y="0" width="1408" height="48"/>
+      <text class="text" x="16" y="30">/home/user/app</text>
+      <text class="muted" x="300" y="30">3 selected</text>
+    </g>
+    <!-- header row -->
+    <g transform="translate(0,48)">
+      <rect class="hdr" x="0" y="0" width="1408" height="32"/>
+      <text class="muted" x="24" y="21">Name</text>
+      <text class="muted" x="700" y="21">Size</text>
+      <text class="muted" x="840" y="21">Modified</text>
+    </g>
+    <!-- rows w/ checkboxes -->
+    <g transform="translate(0,80)">
+      <rect class="rowA" x="0" y="0" width="1408" height="32"/>
+      <rect x="16" y="8" width="16" height="16" rx="3" fill="#22D3EE"/>
+      <text class="text" x="48" y="21">src/</text>
+      <text class="muted" x="700" y="21">—</text>
+      <text class="text" x="840" y="21">2025-10-17 09:12</text>
+      <rect class="rowB" x="0" y="32" width="1408" height="32"/>
+      <rect x="16" y="40" width="16" height="16" rx="3" fill="#22D3EE"/>
+      <text class="text" x="48" y="53">README.md</text>
+      <text class="text" x="700" y="53">4.0 KB</text>
+      <text class="text" x="840" y="53">2025-10-16 20:00</text>
+      <rect class="rowA" x="0" y="64" width="1408" height="32"/>
+      <rect x="16" y="72" width="16" height="16" rx="3" fill="#22D3EE"/>
+      <text class="text" x="48" y="85">build.zip</text>
+      <text class="text" x="700" y="85">10 GB</text>
+      <text class="text" x="840" y="85">2025-10-16 12:00</text>
+    </g>
+  </g>
+
+  <!-- Bulk action bar -->
+  <g transform="translate(360,760)">
+    <rect class="bar" x="0" y="0" width="720" height="64" rx="12"/>
+    <text x="16" y="24" fill="#E8ECF2" font-family="-apple-system,Segoe UI,Roboto,Arial,sans-serif" font-size="14">3 selected</text>
+    <g transform="translate(140,12)">
+      <rect class="btn" x="0" y="0" width="110" height="40" rx="8"/>
+      <text class="text" x="16" y="26">Download</text>
+    </g>
+    <g transform="translate(256,12)">
+      <rect class="btn" x="0" y="0" width="90" height="40" rx="8"/>
+      <text class="text" x="16" y="26">Rename</text>
+    </g>
+    <g transform="translate(352,12)">
+      <rect class="btn" x="0" y="0" width="80" height="40" rx="8"/>
+      <text class="text" x="16" y="26">Move</text>
+    </g>
+    <g transform="translate(440,12)">
+      <rect class="btn" x="0" y="0" width="90" height="40" rx="8"/>
+      <text class="text" x="16" y="26">Delete</text>
+    </g>
+  </g>
+</svg>

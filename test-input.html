@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Test Command Input</title>
+<link rel="stylesheet" href="design-system/modern/tokens.css"/>
+<link rel="stylesheet" href="app/renderer/styles.css"/>
+</head>
+<body>
+  <!-- Simplified layout to test command input -->
+  <div class="pane-terminal" style="height: 400px; display: flex; flex-direction: column;">
+    <div class="chat-container" style="flex: 1; display: flex; background: var(--bg-secondary);">
+      <div class="chat-messages" id="chatMessages">
+        <div class="system-message">
+          <span class="message-icon">🚀</span>
+          <div class="message-content">
+            <div class="message-text">Welcome to Smarterminal</div>
+            <div class="message-hint">Type a command below and press Enter</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Command Input Area (should be visible) -->
+    <div class="command-input-wrapper" style="display: block;">
+      <div class="command-input-container">
+        <div class="input-prefix">
+          <span class="prompt-symbol">$</span>
+          <span class="current-path" id="cwdLabel">~</span>
+        </div>
+        <textarea
+          id="commandInput"
+          class="command-input"
+          placeholder="Type a command and press Enter..."
+          rows="1"
+          autocomplete="off"
+          spellcheck="false"
+        ></textarea>
+        <div class="input-actions">
+          <button class="input-action-btn primary" title="Send (Enter)">▶</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

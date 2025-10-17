@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="300" viewBox="0 0 1440 300">
+  <style>
+    .surface{fill:#FFFFFF;stroke:#D7DDE8}
+    .text{fill:#1B2330;font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .muted{fill:#5B6475;font:12px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  </style>
+  <rect class="surface" x="8" y="8" width="1424" height="284" rx="6"/>
+  <g transform="translate(24,24)">
+    <rect x="0" y="0" width="840" height="72" rx="6" fill="#F3F4F6" stroke="#D7DDE8"/>
+    <text class="text" x="16" y="30">Connection lost. Press Enter to reconnect.</text>
+    <text class="muted" x="16" y="52">Error: Network unreachable (E_CONN)</text>
+  </g>
+</svg>

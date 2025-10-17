@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <defs>
+    <linearGradient id="acc" x1="0" x2="1">
+      <stop offset="0%" stop-color="#7C3AED"/>
+      <stop offset="100%" stop-color="#2563EB"/>
+    </linearGradient>
+    <style>
+      .bg { fill:#FAFBFC }
+      .surface { fill:#FFFFFF }
+      .border { stroke:#E6E9EF; stroke-width:1 }
+      .muted { fill:#5B6475; font:13px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+      .text { fill:#0B1220; font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif }
+      .mono { fill:#E8ECF2; font:13px Menlo,Consolas,monospace }
+      .tab { fill:#FFFFFF; filter:url(#s) }
+      .tabbar { fill:#FFFFFF }
+      .ghost { fill:#FFFFFF; stroke:#E6E9EF }
+      .token { fill:#2563EB; }
+      .toast { fill:#0B1220; opacity:.9 }
+    </style>
+    <filter id="s" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="1" stdDeviation="1" flood-color="#000" flood-opacity="0.06"/>
+    </filter>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1440" height="900"/>
+
+  <!-- Top tab strip -->
+  <rect class="tabbar" x="0" y="0" width="1440" height="56"/>
+  <g transform="translate(16,12)">
+    <g>
+      <rect class="tab" x="0" y="0" width="220" height="32" rx="8"/>
+      <text class="text" x="12" y="21">dev-server • SSH</text>
+      <line x1="0" y1="34" x2="220" y2="34" stroke="url(#acc)" stroke-width="2"/>
+    </g>
+    <g>
+      <rect class="tab" x="236" y="0" width="160" height="32" rx="8" opacity=".8"/>
+      <text class="muted" x="248" y="21">Local</text>
+    </g>
+    <g>
+      <rect class="tab" x="404" y="0" width="200" height="32" rx="8" opacity=".8"/>
+      <text class="muted" x="416" y="21">db-prod • SSH</text>
+    </g>
+  </g>
+  <g transform="translate(1400,12)">
+    <rect class="ghost" x="0" y="0" width="32" height="32" rx="8"/>
+    <text class="muted" x="10" y="21">+</text>
+  </g>
+
+  <!-- Terminal card -->
+  <g transform="translate(16,72)">
+    <rect x="0" y="0" width="1408" height="488" rx="8" fill="#0B1220"/>
+    <!-- toolbar -->
+    <g transform="translate(12,12)">
+      <rect class="ghost" x="0" y="0" width="64" height="24" rx="6"/>
+      <text class="muted" x="12" y="17">Find</text>
+      <rect class="ghost" x="72" y="0" width="64" height="24" rx="6"/>
+      <text class="muted" x="84" y="17">Copy</text>
+      <rect class="ghost" x="144" y="0" width="72" height="24" rx="6"/>
+      <text class="muted" x="156" y="17">Paste</text>
+    </g>
+    <!-- terminal lines -->
+    <g transform="translate(16,56)">
+      <text class="mono" x="0" y="0">user@dev:~$ ls -la</text>
+      <text class="mono" x="0" y="24">drwxr-xr-x    5 user staff     160 .</text>
+      <text class="mono" x="0" y="48">-rw-r--r--    1 user staff    4096 README.md</text>
+      <text class="mono" x="0" y="72">-rw-r--r--    1 user staff     512 app.ts</text>
+      <text class="mono" x="0" y="96">user@dev:~/app$</text>
+    </g>
+  </g>
+
+  <!-- Splitter with handle -->
+  <g transform="translate(0,572)">
+    <rect x="0" y="0" width="1440" height="2" fill="#E6E9EF"/>
+    <g transform="translate(708,-6)">
+      <rect x="0" y="0" width="24" height="12" rx="6" fill="#FFFFFF" stroke="#E6E9EF"/>
+      <circle cx="6" cy="6" r="1.5" fill="#5B6475"/>
+      <circle cx="12" cy="6" r="1.5" fill="#5B6475"/>
+      <circle cx="18" cy="6" r="1.5" fill="#5B6475"/>
+    </g>
+  </g>
+
+  <!-- File pane card -->
+  <g transform="translate(16,590)">
+    <rect class="surface" x="0" y="0" width="1408" height="294" rx="8"/>
+    <rect class="border" fill="none" x="0.5" y="0.5" width="1407" height="293"/>
+    <!-- header -->
+    <g transform="translate(16,14)">
+      <rect x="0" y="0" width="220" height="28" rx="14" fill="#F4F6FA" stroke="#E6E9EF"/>
+      <text class="muted" x="12" y="19">home</text>
+      <text class="muted" x="48" y="19">›</text>
+      <text class="text" x="62" y="19">user</text>
+      <text class="muted" x="102" y="19">›</text>
+      <text class="text" x="116" y="19">app</text>
+    </g>
+    <g transform="translate(1230,10)">
+      <rect x="0" y="0" width="84" height="28" rx="14" fill="#E9F0FF"/>
+      <text class="text" x="16" y="19">Remote</text>
+    </g>
+    <g transform="translate(1120,10)">
+      <rect class="ghost" x="0" y="0" width="84" height="28" rx="6"/>
+      <text class="muted" x="16" y="19">Upload</text>
+    </g>
+    <g transform="translate(1216,10)">
+      <rect class="ghost" x="0" y="0" width="84" height="28" rx="6"/>
+      <text class="muted" x="16" y="19">Refresh</text>
+    </g>
+    <!-- table header -->
+    <g transform="translate(0,56)">
+      <rect fill="#F8FAFC" x="0" y="0" width="1408" height="32"/>
+      <text class="muted" x="24" y="21">Name</text>
+      <text class="muted" x="700" y="21">Size</text>
+      <text class="muted" x="840" y="21">Modified</text>
+      <text class="muted" x="1060" y="21">Type</text>
+      <text class="muted" x="1180" y="21">Perm</text>
+    </g>
+    <!-- rows -->
+    <g transform="translate(0,88)">
+      <rect fill="#FFFFFF" x="0" y="0" width="1408" height="32"/>
+      <text class="text" x="24" y="21">src/</text>
+      <text class="muted" x="700" y="21">—</text>
+      <text class="text" x="840" y="21">2025-10-17 09:12</text>
+      <text class="text" x="1060" y="21">dir</text>
+      <text class="text" x="1180" y="21">rwxr-xr-x</text>
+
+      <rect fill="#F9FAFB" x="0" y="32" width="1408" height="32"/>
+      <text class="text" x="24" y="53">README.md</text>
+      <text class="text" x="700" y="53">4.0 KB</text>
+      <text class="text" x="840" y="53">2025-10-16 20:00</text>
+      <text class="text" x="1060" y="53">file</text>
+      <text class="text" x="1180" y="53">rw-r--r--</text>
+
+      <rect fill="#FFFFFF" x="0" y="64" width="1408" height="32"/>
+      <text class="text" x="24" y="85">link → /opt/data</text>
+      <text class="muted" x="700" y="85">—</text>
+      <text class="text" x="840" y="85">2025-10-15 10:30</text>
+      <text class="text" x="1060" y="85">symlink</text>
+      <text class="text" x="1180" y="85">lrwxr-xr-x</text>
+    </g>
+  </g>
+
+  <!-- Toast: CWD/Host switch -->
+  <g transform="translate(1040,800)">
+    <rect class="toast" x="0" y="0" width="360" height="68" rx="10"/>
+    <text x="16" y="28" fill="#FFFFFF" font-family="-apple-system,Segoe UI,Roboto,Arial,sans-serif" font-size="14">Switch to dev-server:/home/user/app?</text>
+    <text x="16" y="48" fill="#A8B0BF" font-family="-apple-system,Segoe UI,Roboto,Arial,sans-serif" font-size="12">Switch   Always   Never</text>
+  </g>
+</svg>

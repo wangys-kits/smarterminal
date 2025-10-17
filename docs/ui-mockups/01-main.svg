@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <defs>
+    <style>
+      .bg { fill: #ffffff; }
+      .bar { fill: #eef0f2; }
+      .border { stroke: #e1e4e8; stroke-width: 1; }
+      .text { font: 14px -apple-system,Segoe UI,Roboto,Arial,sans-serif; fill: #111826; }
+      .muted { fill: #58657a; font: 13px -apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+      .mono { font: 13px Menlo,Consolas,monospace; fill: #0f172a; }
+      .accent { fill: #2563eb; }
+      .btn { fill: #ffffff; stroke: #e1e4e8; stroke-width: 1; }
+      .tab { fill: #ffffff; stroke: #e1e4e8; }
+      .tab-active { fill: #ffffff; stroke: #e1e4e8; }
+      .underline { stroke: #2563eb; stroke-width: 2; }
+      .splitter { fill: #cfd6dd; }
+      .filehdr { fill: #f6f7f9; }
+      .badge { fill: #2563eb; }
+    </style>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1440" height="900"/>
+  
+  <!-- Top Tab Bar -->
+  <rect class="bar" x="0" y="0" width="1440" height="48"/>
+  <g transform="translate(12,8)">
+    <rect class="tab-active" x="0" y="0" width="200" height="32" rx="6"/>
+    <text class="text" x="12" y="21">dev-server (ssh)</text>
+    <line class="underline" x1="0" y1="34" x2="200" y2="34"/>
+    <rect class="tab" x="208" y="0" width="160" height="32" rx="6"/>
+    <text class="muted" x="220" y="21">local</text>
+    <rect class="tab" x="372" y="0" width="180" height="32" rx="6"/>
+    <text class="muted" x="384" y="21">db-prod (ssh)</text>
+  </g>
+  <rect class="btn" x="1400" y="8" width="28" height="28" rx="6"/>
+  <text class="muted" x="1408" y="26">+</text>
+
+  <!-- Terminal Pane -->
+  <g transform="translate(0,48)">
+    <rect class="bg" x="0" y="0" width="1440" height="510"/>
+    <rect class="border" fill="none" x="0.5" y="0.5" width="1439" height="509"/>
+    <!-- terminal toolbar ghost buttons -->
+    <g transform="translate(12,12)">
+      <rect class="btn" x="0" y="0" width="72" height="24" rx="4"/>
+      <text class="muted" x="10" y="17">Find</text>
+      <rect class="btn" x="80" y="0" width="72" height="24" rx="4"/>
+      <text class="muted" x="90" y="17">Copy</text>
+      <rect class="btn" x="160" y="0" width="72" height="24" rx="4"/>
+      <text class="muted" x="170" y="17">Paste</text>
+    </g>
+    <!-- terminal content sample -->
+    <g transform="translate(12,48)">
+      <text class="mono" x="0" y="0">user@dev-server:~$ ls -la</text>
+      <text class="mono" x="0" y="24">drwxr-xr-x   5 user staff   160 .</text>
+      <text class="mono" x="0" y="48">-rw-r--r--   1 user staff  4096 README.md</text>
+      <text class="mono" x="0" y="72">-rw-r--r--   1 user staff   512 app.ts</text>
+      <text class="mono" x="0" y="96">user@dev-server:~/app$</text>
+    </g>
+  </g>
+
+  <!-- Splitter -->
+  <rect class="splitter" x="0" y="558" width="1440" height="6"/>
+
+  <!-- File Pane -->
+  <g transform="translate(0,564)">
+    <rect class="bg" x="0" y="0" width="1440" height="336"/>
+    <rect class="border" fill="none" x="0.5" y="0.5" width="1439" height="335"/>
+    <!-- header -->
+    <rect class="filehdr" x="0" y="0" width="1440" height="44"/>
+    <text class="text" x="12" y="28">/home/user/app</text>
+    <rect class="btn" x="1240" y="10" width="64" height="24" rx="4"/>
+    <text class="muted" x="1252" y="26">Upload</text>
+    <rect class="btn" x="1310" y="10" width="64" height="24" rx="4"/>
+    <text class="muted" x="1320" y="26">Refresh</text>
+    <rect class="badge" x="1110" y="12" width="100" height="20" rx="10"/>
+    <text class="bg" x="1122" y="26">Remote</text>
+
+    <!-- table header -->
+    <g transform="translate(0,44)">
+      <rect class="filehdr" x="0" y="0" width="1440" height="32"/>
+      <text class="muted" x="16" y="21">Name</text>
+      <text class="muted" x="640" y="21">Size</text>
+      <text class="muted" x="760" y="21">Modified</text>
+      <text class="muted" x="980" y="21">Type</text>
+      <text class="muted" x="1100" y="21">Perm</text>
+    </g>
+    <!-- rows -->
+    <g transform="translate(0,76)">
+      <text class="text" x="16" y="22">src/</text>
+      <text class="text" x="640" y="22">—</text>
+      <text class="text" x="760" y="22">2025-10-17 09:12</text>
+      <text class="text" x="980" y="22">dir</text>
+      <text class="text" x="1100" y="22">rwxr-xr-x</text>
+
+      <text class="text" x="16" y="50">README.md</text>
+      <text class="text" x="640" y="50">4.0 KB</text>
+      <text class="text" x="760" y="50">2025-10-16 20:00</text>
+      <text class="text" x="980" y="50">file</text>
+      <text class="text" x="1100" y="50">rw-r--r--</text>
+
+      <text class="text" x="16" y="78">link -> /opt/data</text>
+      <text class="text" x="640" y="78">—</text>
+      <text class="text" x="760" y="78">2025-10-15 10:30</text>
+      <text class="text" x="980" y="78">symlink</text>
+      <text class="text" x="1100" y="78">lrwxr-xr-x</text>
+    </g>
+  </g>
+
+  <!-- Toast example -->
+  <g transform="translate(1060,810)">
+    <rect x="0" y="0" width="360" height="64" rx="10" fill="#111826" opacity="0.92"/>
+    <text x="16" y="26" fill="#ffffff" font-family="-apple-system,Segoe UI,Roboto,Arial,sans-serif" font-size="14">Switch to dev-server:/home/user/app?</text>
+    <text x="16" y="46" fill="#cfd6dd" font-family="-apple-system,Segoe UI,Roboto,Arial,sans-serif" font-size="12">[Switch]  [Always]  [Never]</text>
+  </g>
+</svg>

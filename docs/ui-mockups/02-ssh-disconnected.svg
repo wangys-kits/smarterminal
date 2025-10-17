@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <style>
+    .bg { fill: #0f172a; }
+    .bar { fill: #111827; }
+    .tab { fill: #1f2937; stroke: #2b3645; }
+    .active { stroke: #3b82f6; }
+    .text { font: 14px -apple-system,Segoe UI,Roboto,Arial,sans-serif; fill: #cfd6dd; }
+    .mono { font: 13px Menlo,Consolas,monospace; fill: #e5e7eb; }
+    .accent { fill: #3b82f6; }
+    .banner { fill: #1f2937; stroke: #3b82f6; }
+  </style>
+  <rect class="bg" width="1440" height="900"/>
+  <rect class="bar" x="0" y="0" width="1440" height="48"/>
+  <g transform="translate(12,8)">
+    <rect class="tab active" x="0" y="0" width="220" height="32" rx="6"/>
+    <text class="text" x="12" y="21">prod-db (ssh)</text>
+  </g>
+  <!-- Terminal -->
+  <g transform="translate(0,48)">
+    <rect fill="#0f172a" x="0" y="0" width="1440" height="852"/>
+    <g transform="translate(12,16)">
+      <rect class="banner" x="0" y="0" width="800" height="64" rx="8"/>
+      <text class="text" x="16" y="26">Connection lost. Press Enter to reconnect.</text>
+      <text class="text" x="16" y="46">Error: Network unreachable (E_CONN)</text>
+    </g>
+    <g transform="translate(12,120)">
+      <text class="mono" x="0" y="0">user@prod-db:~$</text>
+      <text class="mono" x="0" y="24">_</text>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="720" viewBox="0 0 420 720">
+  <defs>
+    <linearGradient id="brand" x1="0" x2="1"><stop offset="0%" stop-color="#2563EB"/><stop offset="100%" stop-color="#7C3AED"/></linearGradient>
+  </defs>
+  <style>
+    .panel{fill:#FFFFFF;stroke:#E6EAF0}
+    .txt{fill:#0B1220;font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .mut{fill:#5B6475;font:12px -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  </style>
+  <rect class="panel" x="0.5" y="0.5" width="419" height="719" rx="12"/>
+  <text class="txt" x="16" y="28">Transfers</text>
+  <text class="mut" x="16" y="48">1 running • 1 paused • 1 failed</text>
+  <g transform="translate(16,64)">
+    <rect x="0" y="0" width="388" height="90" rx="10" fill="#FFFFFF" stroke="#E6EAF0"/>
+    <text class="txt" x="12" y="28">upload src/app.ts → /home/user/app/</text>
+    <text class="mut" x="12" y="48">1.2 MB / 4.0 MB • 2.1 MB/s • ETA 1s</text>
+    <rect fill="#EEF2FF" x="12" y="58" width="364" height="8" rx="4"/>
+    <rect fill="url(#brand)" x="12" y="58" width="210" height="8" rx="4"/>
+  </g>
+  <g transform="translate(16,164)">
+    <rect x="0" y="0" width="388" height="90" rx="10" fill="#FFFFFF" stroke="#E6EAF0"/>
+    <text class="txt" x="12" y="28">download logs/2025-10-16.zip</text>
+    <text class="mut" x="12" y="48">Paused at 6.2 GB / 10 GB</text>
+    <rect fill="#EEF2FF" x="12" y="58" width="364" height="8" rx="4"/>
+    <rect fill="#A5B4FC" x="12" y="58" width="226" height="8" rx="4"/>
+  </g>
+  <g transform="translate(16,264)">
+    <rect x="0" y="0" width="388" height="90" rx="10" fill="#FFFFFF" stroke="#E6EAF0"/>
+    <text class="txt" x="12" y="28">upload build/app.dmg</text>
+    <text class="mut" x="12" y="48">Failed: resume unsupported</text>
+    <rect fill="#F1F5F9" x="12" y="58" width="364" height="8" rx="4"/>
+    <rect fill="#CBD5E1" x="12" y="58" width="64" height="8" rx="4"/>
+  </g>
+</svg>
