@@ -6,6 +6,67 @@
 }
 
 /* ============================================
+   DARK THEME (Default & One Dark Pro)
+   ============================================ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Base colors - One Dark Pro core palette */
+    --bg-primary: #21252B;
+    --bg-secondary: #282C34;
+    --bg-tertiary: #2C313A;
+    --bg-hover: #2C313C;
+    --bg-active: #323842;
+
+    /* Borders - subtle but visible */
+    --border-primary: #181A1F;
+    --border-secondary: #2C313A;
+    --border-focus: #528BFF;
+
+    /* Text hierarchy - One Dark Pro text colors */
+    --text-primary: #ABB2BF;
+    --text-secondary: #5C6370;
+    --text-tertiary: #4B5263;
+    --text-disabled: #3E4451;
+
+    /* Semantic colors - One Dark Pro accents */
+    --color-accent: #61AFEF;
+    --color-accent-hover: #84C0F4;
+    --color-accent-bg: #2C3E50;
+    --color-success: #98C379;
+    --color-success-bg: #2D3B2C;
+    --color-warning: #E5C07B;
+    --color-warning-bg: #3B3726;
+    --color-error: #E06C75;
+    --color-error-bg: #3B2C2F;
+    --color-info: #61AFEF;
+    --color-info-bg: #2C3E50;
+
+    /* Status indicators */
+    --status-ssh: #61AFEF;
+    --status-local: #5C6370;
+    --status-transfer: #E5C07B;
+    --status-success: #98C379;
+    --status-error: #E06C75;
+
+    /* Terminal colors - One Dark Pro terminal */
+    --term-bg: #282C34;
+    --term-fg: #ABB2BF;
+    --term-cursor: #528BFF;
+    --term-selection: rgba(97, 175, 239, 0.3);
+    --term-border: #181A1F;
+
+    /* Shadows - minimal in dark */
+    --shadow-xs: none;
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+
+    /* Overlays */
+    --overlay-backdrop: rgba(0, 0, 0, 0.6);
+  }
+}
+
+/* ============================================
    LIGHT THEME (One Light)
    ============================================ */
 @media (prefers-color-scheme: light) {
@@ -67,64 +128,118 @@
 }
 
 /* ============================================
-   DARK THEME (One Dark Pro)
+   MANUAL THEME OVERRIDES (Higher Priority)
    ============================================ */
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* Base colors - One Dark Pro core palette */
-    --bg-primary: #21252B;
-    --bg-secondary: #282C34;
-    --bg-tertiary: #2C313A;
-    --bg-hover: #2C313C;
-    --bg-active: #323842;
+:root[data-theme="dark"] {
+  /* Base colors - One Dark Pro core palette */
+  --bg-primary: #21252B;
+  --bg-secondary: #282C34;
+  --bg-tertiary: #2C313A;
+  --bg-hover: #2C313C;
+  --bg-active: #323842;
 
-    /* Borders - subtle but visible */
-    --border-primary: #181A1F;
-    --border-secondary: #2C313A;
-    --border-focus: #528BFF;
+  /* Borders - subtle but visible */
+  --border-primary: #181A1F;
+  --border-secondary: #2C313A;
+  --border-focus: #528BFF;
 
-    /* Text hierarchy - One Dark Pro text colors */
-    --text-primary: #ABB2BF;
-    --text-secondary: #5C6370;
-    --text-tertiary: #4B5263;
-    --text-disabled: #3E4451;
+  /* Text hierarchy - One Dark Pro text colors */
+  --text-primary: #ABB2BF;
+  --text-secondary: #5C6370;
+  --text-tertiary: #4B5263;
+  --text-disabled: #3E4451;
 
-    /* Semantic colors - One Dark Pro accents */
-    --color-accent: #61AFEF;
-    --color-accent-hover: #84C0F4;
-    --color-accent-bg: #2C3E50;
-    --color-success: #98C379;
-    --color-success-bg: #2D3B2C;
-    --color-warning: #E5C07B;
-    --color-warning-bg: #3B3726;
-    --color-error: #E06C75;
-    --color-error-bg: #3B2C2F;
-    --color-info: #61AFEF;
-    --color-info-bg: #2C3E50;
+  /* Semantic colors - One Dark Pro accents */
+  --color-accent: #61AFEF;
+  --color-accent-hover: #84C0F4;
+  --color-accent-bg: #2C3E50;
+  --color-success: #98C379;
+  --color-success-bg: #2D3B2C;
+  --color-warning: #E5C07B;
+  --color-warning-bg: #3B3726;
+  --color-error: #E06C75;
+  --color-error-bg: #3B2C2F;
+  --color-info: #61AFEF;
+  --color-info-bg: #2C3E50;
 
-    /* Status indicators */
-    --status-ssh: #61AFEF;
-    --status-local: #5C6370;
-    --status-transfer: #E5C07B;
-    --status-success: #98C379;
-    --status-error: #E06C75;
+  /* Status indicators */
+  --status-ssh: #61AFEF;
+  --status-local: #5C6370;
+  --status-transfer: #E5C07B;
+  --status-success: #98C379;
+  --status-error: #E06C75;
 
-    /* Terminal colors - One Dark Pro terminal */
-    --term-bg: #282C34;
-    --term-fg: #ABB2BF;
-    --term-cursor: #528BFF;
-    --term-selection: rgba(97, 175, 239, 0.3);
-    --term-border: #181A1F;
+  /* Terminal colors - One Dark Pro terminal */
+  --term-bg: #282C34;
+  --term-fg: #ABB2BF;
+  --term-cursor: #528BFF;
+  --term-selection: rgba(97, 175, 239, 0.3);
+  --term-border: #181A1F;
 
-    /* Shadows - minimal in dark */
-    --shadow-xs: none;
-    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
-    --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.4);
-    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  /* Shadows - minimal in dark */
+  --shadow-xs: none;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
 
-    /* Overlays */
-    --overlay-backdrop: rgba(0, 0, 0, 0.6);
-  }
+  /* Overlays */
+  --overlay-backdrop: rgba(0, 0, 0, 0.6);
+}
+
+:root[data-theme="light"] {
+  /* Base colors - One Light */
+  --bg-primary: #FAFAFA;
+  --bg-secondary: #FFFFFF;
+  --bg-tertiary: #F0F0F0;
+  --bg-hover: #E5E5E6;
+  --bg-active: #D7D7D7;
+
+  /* Borders */
+  --border-primary: #D0D0D0;
+  --border-secondary: #E5E5E5;
+  --border-focus: #4078F2;
+
+  /* Text hierarchy */
+  --text-primary: #383A42;
+  --text-secondary: #696C77;
+  --text-tertiary: #A0A1A7;
+  --text-disabled: #C5C6C7;
+
+  /* Semantic colors - One Light palette */
+  --color-accent: #4078F2;
+  --color-accent-hover: #2D5BC7;
+  --color-accent-bg: #E7EFFD;
+  --color-success: #50A14F;
+  --color-success-bg: #E6F4E6;
+  --color-warning: #C18401;
+  --color-warning-bg: #FDF6E3;
+  --color-error: #E45649;
+  --color-error-bg: #FDEEED;
+  --color-info: #4078F2;
+  --color-info-bg: #E7EFFD;
+
+  /* Status indicators */
+  --status-ssh: #4078F2;
+  --status-local: #696C77;
+  --status-transfer: #C18401;
+  --status-success: #50A14F;
+  --status-error: #E45649;
+
+  /* Terminal colors */
+  --term-bg: #282C34;
+  --term-fg: #ABB2BF;
+  --term-cursor: #528BFF;
+  --term-selection: rgba(64, 120, 242, 0.3);
+  --term-border: #3E4451;
+
+  /* Shadows */
+  --shadow-xs: none;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.12);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.15);
+
+  /* Overlays */
+  --overlay-backdrop: rgba(0, 0, 0, 0.4);
 }
 
 /* ============================================
@@ -144,9 +259,9 @@
   --radius-lg: 6px;
 
   /* Component heights */
-  --toolbar-height: 40px;
+  --toolbar-height: 48px;
   --statusbar-height: 24px;
-  --tab-height: 28px;
+  --tab-height: 36px;
   --button-height: 24px;
   --input-height: 24px;
 

@@ -10,10 +10,78 @@ try { pty = require('node-pty'); } catch (e) {
 }
 const { spawn } = require('child_process');
 
+const TAB_DIR_NAME = 'tabs';
+const TAB_EXTENSION = '.smt';
+const fsp = fs.promises;
+
+function findExecutable(candidate) {
+  if (!candidate) return null;
+  const hasPathSeparator = candidate.includes(path.sep) || candidate.includes('/');
+  if (hasPathSeparator) {
+    return fs.existsSync(candidate) ? candidate : null;
+  }
+
+  const pathEnv = process.env.PATH || '';
+  const segments = pathEnv.split(path.delimiter).filter(Boolean);
+  const tryNames = [candidate];
+  if (process.platform === 'win32') {
+    const pathext = (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM')
+      .split(';')
+      .filter(Boolean);
+    for (const ext of pathext) {
+      const upper = ext.toUpperCase();
+      if (!candidate.toUpperCase().endsWith(upper)) {
+        tryNames.push(candidate + ext.toLowerCase());
+      }
+    }
+  }
+  for (const dir of segments) {
+    for (const name of tryNames) {
+      const full = path.join(dir, name);
+      if (fs.existsSync(full)) {
+        return full;
+      }
+    }
+  }
+  return null;
+}
+
+function resolveShellExecutable(explicit) {
+  if (process.platform === 'win32') {
+    const candidates = [
+      explicit,
+      process.env.COMSPEC,
+      'powershell.exe',
+      'pwsh.exe',
+      'cmd.exe'
+    ];
+    for (const candidate of candidates) {
+      const resolved = findExecutable(candidate);
+      if (resolved) return resolved;
+    }
+    return null;
+  }
+
+  const candidates = [
+    explicit,
+    process.env.SHELL,
+    '/bin/zsh',
+    '/usr/bin/zsh',
+    '/bin/bash',
+    '/usr/bin/bash',
+    '/bin/sh',
+    '/usr/bin/sh'
+  ];
+  for (const candidate of candidates) {
+    const resolved = findExecutable(candidate);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
 // Persistent settings/session
 const settings = new Store({ name: 'settings', defaults: { splitRatio: 0.6, searchLimitLines: 20000 } });
 const sessionStore = new Store({ name: 'session', defaults: { windows: [] } });
-const knownHostsStore = new Store({ name: 'known_hosts', defaults: { entries: {} } });
 
 const isMac = process.platform === 'darwin';
 
@@ -21,15 +89,7 @@ const isMac = process.platform === 'darwin';
 const PTYS = new Map();
 /** @type {Map<string, any>} */
 const SSH_CONNS = new Map();
-/** @type {Map<string, any>} */
-const SSH_SHELLS = new Map();
-/** @type {Map<string, string>} */
-const TRUST_ONCE = new Map();
-/** @type {Map<string, string>} */
-const LAST_FP = new Map();
 
-let ssh2 = null;
-try { ssh2 = require('ssh2'); } catch (_) {}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -53,8 +113,10 @@ function createWindow() {
   const startUrl = new URL(`file://${path.join(__dirname, 'renderer', 'index.html')}`);
   win.loadURL(startUrl.toString());
 
-  // Optional: Open devtools during early development
-  win.webContents.openDevTools({ mode: 'detach' });
+  // Open devtools in development mode only
+  if (process.env.NODE_ENV === 'development') {
+    win.webContents.openDevTools({ mode: 'detach' });
+  }
 
   return win;
 }
@@ -67,7 +129,10 @@ app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  registerTabHandlers();
+  createWindow();
+});
 
 // IPC contracts (whitelist)
 // Terminal spawn
@@ -75,14 +140,9 @@ ipcMain.handle('term.spawn', (event, args) => {
   const { tabId, shellName, cwd, cols, rows, encoding, preferUTF8 } = args || {};
 
   // Resolve default shell per platform
-  let shellExe = shellName;
+  const shellExe = resolveShellExecutable(shellName);
   if (!shellExe) {
-    if (process.platform === 'win32') {
-      // Prefer PowerShell
-      shellExe = process.env.COMSPEC || 'C\\\\Windows\\\\System32\\\\\WindowsPowerShell\\\\v1.0\\\\\powershell.exe';
-    } else {
-      shellExe = process.env.SHELL || '/bin/zsh';
-    }
+    return { ok: false, error: 'NO_COMPATIBLE_SHELL_FOUND' };
   }
 
   const env = { ...process.env };
@@ -94,27 +154,32 @@ ipcMain.handle('term.spawn', (event, args) => {
 
   const ptyId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   let proc;
-  if (pty) {
-    // Preferred PTY
-    proc = pty.spawn(shellExe, [], {
-      name: 'xterm-color',
-      cols: cols || 120,
-      rows: rows || 30,
-      cwd: cwd || os.homedir(),
-      env
-    });
-    PTYS.set(ptyId, proc);
-    proc.onData(data => { try { event.sender.send('evt.term.data', { ptyId, data }); } catch (_) {} });
-    proc.onExit(e => { try { event.sender.send('evt.term.exit', { ptyId, code: e.exitCode, signal: e.signal }); } catch (_) {} PTYS.delete(ptyId); });
-  } else {
-    // Fallback stdio shell (limited; no TTY features)
-    const sh = process.platform === 'win32' ? (shellExe || 'powershell.exe') : (shellExe || '/bin/bash');
-    const args = process.platform === 'win32' ? ['-NoLogo'] : ['-i'];
-    proc = spawn(sh, args, { cwd: cwd || os.homedir(), env });
-    PTYS.set(ptyId, proc);
-    proc.stdout.on('data', buf => { try { event.sender.send('evt.term.data', { ptyId, data: buf.toString('utf8') }); } catch (_) {} });
-    proc.stderr.on('data', buf => { try { event.sender.send('evt.term.data', { ptyId, data: buf.toString('utf8') }); } catch (_) {} });
-    proc.on('close', code => { try { event.sender.send('evt.term.exit', { ptyId, code }); } catch (_) {} PTYS.delete(ptyId); });
+  try {
+    if (pty) {
+      // Preferred PTY
+      proc = pty.spawn(shellExe, [], {
+        name: 'xterm-color',
+        cols: cols || 120,
+        rows: rows || 30,
+        cwd: cwd || os.homedir(),
+        env
+      });
+      PTYS.set(ptyId, proc);
+      proc.onData(data => { try { event.sender.send('evt.term.data', { ptyId, data }); } catch (_) {} });
+      proc.onExit(e => { try { event.sender.send('evt.term.exit', { ptyId, code: e.exitCode, signal: e.signal }); } catch (_) {} PTYS.delete(ptyId); });
+    } else {
+      // Fallback stdio shell (limited; no TTY features)
+      const sh = process.platform === 'win32' ? shellExe : shellExe;
+      const spawnArgs = process.platform === 'win32' ? ['-NoLogo'] : ['-i'];
+      proc = spawn(sh, spawnArgs, { cwd: cwd || os.homedir(), env });
+      PTYS.set(ptyId, proc);
+      proc.stdout.on('data', buf => { try { event.sender.send('evt.term.data', { ptyId, data: buf.toString('utf8') }); } catch (_) {} });
+      proc.stderr.on('data', buf => { try { event.sender.send('evt.term.data', { ptyId, data: buf.toString('utf8') }); } catch (_) {} });
+      proc.on('close', code => { try { event.sender.send('evt.term.exit', { ptyId, code }); } catch (_) {} PTYS.delete(ptyId); });
+    }
+  } catch (err) {
+    console.error('[term.spawn] Failed to launch shell:', err);
+    return { ok: false, error: String(err?.message || err) };
   }
 
   return { ok: true, data: { ptyId } };
@@ -344,115 +409,187 @@ ipcMain.handle('tx.enqueue', (_e, task) => { const id = TX.enqueue(task); return
 ipcMain.handle('tx.list', () => ({ ok: true, data: TX.list() }));
 ipcMain.handle('tx.control', (_e, p) => { TX.control(p); return { ok: true }; });
 
-// ---------------- SSH (optional if deps available) ----------------
-ipcMain.handle('ssh.available', () => ({ ok: true, data: Boolean(ssh2) }));
+let tabsHandlersRegistered = false;
 
-ipcMain.handle('ssh.connect', async (event, { host, port, username, password, agentForward, privateKeyPath, passphrase }) => {
-  if (!ssh2) return { ok: false, error: 'SSH_MODULE_NOT_INSTALLED' };
-  const Client = ssh2.Client;
-  const conn = new Client();
-  const connId = `${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-  const key = `${host}:${port || 22}`;
-  const known = knownHostsStore.get(`entries.${key}`);
-
-  return await new Promise((resolve) => {
-    conn.on('ready', () => { SSH_CONNS.set(connId, conn); resolve({ ok: true, data: { connId } }); });
-    conn.on('error', (err) => {
-      const fp = LAST_FP.get(key);
-      if (fp) {
-        const status = known ? (known === fp ? 'match' : 'mismatch') : 'unknown';
-        try { event.sender.send('evt.ssh.hostkey', { host, port: port || 22, fingerprint: fp, known, status }); } catch(_){}
-      }
-      resolve({ ok: false, error: String(err && err.message || err) });
-    });
-    try {
-      let privateKey;
-      if (privateKeyPath) {
-        try { privateKey = fs.readFileSync(privateKeyPath, 'utf8'); } catch(e) { /* ignore */ }
-      }
-      conn.connect({
-        host,
-        port: port || 22,
-        username,
-        password,
-        privateKey,
-        passphrase,
-        tryKeyboard: false,
-        agent: (process.env.SSH_AUTH_SOCK && agentForward) ? process.env.SSH_AUTH_SOCK : undefined,
-        hostHash: 'sha256',
-        hostVerifier: (hash) => {
-          LAST_FP.set(key, hash);
-          // accept if stored match or trusted once matches
-          if (known && known === hash) return true;
-          const once = TRUST_ONCE.get(key);
-          if (once && once === hash) return true;
-          return false; // trigger error, renderer will prompt
-        },
-        algorithms: { serverHostKey: ['ssh-ed25519','ecdsa-sha2-nistp256','rsa-sha2-256','rsa-sha2-512'] }
-      });
-    } catch (e) { resolve({ ok: false, error: String(e?.message || e) }); }
-  });
-});
-
-ipcMain.handle('ssh.disconnect', (_e, { connId }) => {
-  const c = SSH_CONNS.get(connId);
-  if (c) { try { c.end(); } catch(_){} SSH_CONNS.delete(connId); }
-  return { ok: true };
-});
-
-ipcMain.handle('ssh.openShell', async (event, { connId, cols, rows }) => {
-  const c = SSH_CONNS.get(connId);
-  if (!c) return { ok: false, error: 'SSH_NOT_FOUND' };
-  const id = `${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-  return await new Promise((resolve) => {
-    c.shell({ cols: cols || 120, rows: rows || 30, term: 'xterm-256color' }, (err, stream) => {
-      if (err || !stream) return resolve({ ok: false, error: String(err && err.message || err) });
-      SSH_SHELLS.set(id, { connId, stream });
-      stream.on('data', (d) => { try { event.sender.send('evt.term.data', { ptyId: id, data: d.toString('utf8') }); } catch(_){} });
-      stream.on('close', () => { try { event.sender.send('evt.term.exit', { ptyId: id, code: 0 }); } catch(_){} SSH_SHELLS.delete(id); });
-      resolve({ ok: true, data: { ptyId: id } });
-    });
-  });
-});
-
-ipcMain.handle('ssh.resizeShell', (_e, { ptyId, cols, rows }) => {
-  const sh = SSH_SHELLS.get(ptyId);
-  if (!sh) return { ok: false, error: 'SSH_SHELL_NOT_FOUND' };
-  try { sh.stream.setWindow(rows || 30, cols || 120, 600, 800); } catch(_){}
-  return { ok: true };
-});
-
-ipcMain.handle('ssh.writeShell', (_e, { ptyId, data }) => {
-  const sh = SSH_SHELLS.get(ptyId);
-  if (!sh) return { ok: false, error: 'SSH_SHELL_NOT_FOUND' };
-  try { sh.stream.write(data); } catch(_){}
-  return { ok: true };
-});
-
-ipcMain.handle('ssh.sftpList', async (_e, { connId, path: dir }) => {
-  const c = SSH_CONNS.get(connId);
-  if (!c) return { ok: false, error: 'SSH_NOT_FOUND' };
-  return await new Promise((resolve) => {
-    c.sftp((err, sftp) => {
-      if (err || !sftp) return resolve({ ok: false, error: String(err?.message || err) });
-      sftp.readdir(dir, (e, list) => {
-        if (e) return resolve({ ok: false, error: String(e?.message || e) });
-        const data = (list || []).map(e => ({ name: e.filename, type: e.longname.startsWith('d') ? 'dir' : (e.longname.startsWith('l') ? 'symlink' : 'file'), size: e.attrs?.size || 0, mtime: e.attrs?.mtime ? e.attrs.mtime*1000 : 0, mode: e.attrs?.mode || 0 }));
-        resolve({ ok: true, data });
-      });
-    });
-  });
-});
-
-ipcMain.handle('ssh.trustHost', (_e, { host, port, fingerprint, mode }) => {
-  const key = `${host}:${port || 22}`;
-  if (mode === 'once') TRUST_ONCE.set(key, fingerprint);
-  else if (mode === 'persist') {
-    knownHostsStore.set(`entries.${key}`, fingerprint);
-    TRUST_ONCE.delete(key);
+function ensureTabsDir() {
+  const dir = path.join(app.getPath('userData'), TAB_DIR_NAME);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
-  return { ok: true };
-});
+  return dir;
+}
+
+function tabFilePath(fileName) {
+  return path.join(ensureTabsDir(), fileName);
+}
+
+function sanitizeTitle(title) {
+  if (typeof title !== 'string') return 'Chat';
+  const trimmed = title.trim();
+  return trimmed.length ? trimmed : 'Chat';
+}
+
+function formatTimestampForFile(date = new Date()) {
+  const pad = (value, length = 2) => String(value).padStart(length, '0');
+  const year = date.getFullYear();
+  const month = pad(date.getMonth() + 1);
+  const day = pad(date.getDate());
+  const hours = pad(date.getHours());
+  const minutes = pad(date.getMinutes());
+  const seconds = pad(date.getSeconds());
+  const millis = pad(date.getMilliseconds(), 3);
+  return `${year}${month}${day}${hours}${minutes}${seconds}${millis}`;
+}
+
+async function generateFileName() {
+  const dir = ensureTabsDir();
+  let base = formatTimestampForFile();
+  let fileName = `${base}${TAB_EXTENSION}`;
+  let counter = 1;
+  while (fs.existsSync(path.join(dir, fileName))) {
+    fileName = `${base}-${counter}${TAB_EXTENSION}`;
+    counter += 1;
+    if (counter > 999) {
+      base = formatTimestampForFile(new Date());
+      fileName = `${base}${TAB_EXTENSION}`;
+      counter = 1;
+    }
+  }
+  return fileName;
+}
+
+function registerTabHandlers() {
+  if (tabsHandlersRegistered) return;
+  tabsHandlersRegistered = true;
+
+  ipcMain.handle('tabs.list', async () => {
+    try {
+      const dir = ensureTabsDir();
+      const entries = await fsp.readdir(dir);
+      const result = [];
+      for (const name of entries) {
+        if (!name.endsWith(TAB_EXTENSION)) continue;
+        const filePath = path.join(dir, name);
+        try {
+          const content = await fsp.readFile(filePath, 'utf8');
+          const parsed = JSON.parse(content);
+          let stats = null;
+          try { stats = fs.statSync(filePath); } catch (_) { stats = null; }
+          result.push({
+            fileName: name,
+            title: sanitizeTitle(parsed.title),
+            favorite: Boolean(parsed.favorite),
+            description: typeof parsed.description === 'string' ? parsed.description : '',
+            customTitle: Boolean(parsed.customTitle),
+            deleted: Boolean(parsed.deleted),
+            deletedAt: parsed.deletedAt || null,
+            state: parsed.state || null,
+            createdAt: parsed.createdAt || stats?.birthtimeMs || Date.now(),
+            updatedAt: parsed.updatedAt || stats?.mtimeMs || parsed.createdAt || Date.now()
+          });
+        } catch (err) {
+          console.warn('[tabs] Failed to read', name, err);
+        }
+      }
+      result.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      return { ok: true, data: result };
+    } catch (err) {
+      return { ok: false, error: String(err?.message || err) };
+    }
+  });
+
+  ipcMain.handle('tabs.create', async (_event, { title }) => {
+    try {
+      const safeTitle = sanitizeTitle(title);
+      const fileName = await generateFileName();
+      const filePath = tabFilePath(fileName);
+      const payload = {
+        title: safeTitle,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        favorite: false,
+        customTitle: false,
+        description: '',
+        deleted: false,
+        deletedAt: null,
+        state: null
+      };
+      await fsp.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
+      return { ok: true, data: { fileName, title: safeTitle, favorite: false, description: '', customTitle: false, createdAt: payload.createdAt, updatedAt: payload.updatedAt } };
+    } catch (err) {
+      return { ok: false, error: String(err?.message || err) };
+    }
+  });
+
+  ipcMain.handle('tabs.save', async (_event, { fileName, title, state, favorite, description, customTitle, deleted, deletedAt }) => {
+    try {
+      const safeTitle = sanitizeTitle(title);
+      const filePath = tabFilePath(fileName);
+      let previous = {};
+      try {
+        const existing = await fsp.readFile(filePath, 'utf8');
+        previous = JSON.parse(existing);
+      } catch (_) {
+        previous = {};
+      }
+      const nextDeleted = typeof deleted === 'boolean'
+        ? deleted
+        : (typeof previous.deleted === 'boolean' ? previous.deleted : false);
+      const nextDeletedAt = nextDeleted
+        ? (Number.isFinite(deletedAt) ? deletedAt : (previous.deletedAt || Date.now()))
+        : null;
+      const payload = {
+        title: safeTitle,
+        createdAt: previous.createdAt || Date.now(),
+        updatedAt: Date.now(),
+        favorite: typeof favorite === 'boolean' ? favorite : Boolean(previous.favorite),
+        customTitle: typeof customTitle === 'boolean' ? customTitle : Boolean(previous.customTitle),
+        description: typeof description === 'string' ? description : (typeof previous.description === 'string' ? previous.description : ''),
+        deleted: nextDeleted,
+        deletedAt: nextDeletedAt,
+        state: state !== undefined ? state : (previous.state || null)
+      };
+      await fsp.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
+      return { ok: true, data: { updatedAt: payload.updatedAt, favorite: payload.favorite, description: payload.description, customTitle: payload.customTitle, deleted: payload.deleted, deletedAt: payload.deletedAt } };
+    } catch (err) {
+      return { ok: false, error: String(err?.message || err) };
+    }
+  });
+
+  ipcMain.handle('tabs.rename', async (_event, { fileName, newTitle }) => {
+    try {
+      const safeTitle = sanitizeTitle(newTitle);
+      const filePath = tabFilePath(fileName);
+      const content = await fsp.readFile(filePath, 'utf8');
+      const parsed = JSON.parse(content);
+      parsed.title = safeTitle;
+      parsed.customTitle = true;
+      parsed.updatedAt = Date.now();
+      await fsp.writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+      return {
+        ok: true,
+        data: {
+          fileName,
+          title: safeTitle,
+          favorite: Boolean(parsed.favorite),
+          customTitle: true
+        }
+      };
+    } catch (err) {
+      return { ok: false, error: String(err?.message || err) };
+    }
+  });
+
+  ipcMain.handle('tabs.delete', async (_event, { fileName }) => {
+    try {
+      await fsp.unlink(tabFilePath(fileName));
+      return { ok: true };
+    } catch (err) {
+      if (err && err.code === 'ENOENT') return { ok: true };
+      return { ok: false, error: String(err?.message || err) };
+    }
+  });
+}
 
 // ---------------- File Operations ----------------
 ipcMain.handle('fs.rename', async (_e, { oldPath, newPath }) => {
@@ -494,65 +631,4 @@ ipcMain.handle('fs.createFile', async (_e, { path: filePath }) => {
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };
   }
-});
-
-// SSH/SFTP file operations
-ipcMain.handle('ssh.rename', async (_e, { connId, oldPath, newPath }) => {
-  const c = SSH_CONNS.get(connId);
-  if (!c) return { ok: false, error: 'SSH_NOT_FOUND' };
-  return await new Promise((resolve) => {
-    c.sftp((err, sftp) => {
-      if (err || !sftp) return resolve({ ok: false, error: String(err?.message || err) });
-      sftp.rename(oldPath, newPath, (e) => {
-        if (e) return resolve({ ok: false, error: String(e?.message || e) });
-        resolve({ ok: true });
-      });
-    });
-  });
-});
-
-ipcMain.handle('ssh.delete', async (_e, { connId, path: targetPath, isDir }) => {
-  const c = SSH_CONNS.get(connId);
-  if (!c) return { ok: false, error: 'SSH_NOT_FOUND' };
-  return await new Promise((resolve) => {
-    c.sftp((err, sftp) => {
-      if (err || !sftp) return resolve({ ok: false, error: String(err?.message || err) });
-      const fn = isDir ? sftp.rmdir.bind(sftp) : sftp.unlink.bind(sftp);
-      fn(targetPath, (e) => {
-        if (e) return resolve({ ok: false, error: String(e?.message || e) });
-        resolve({ ok: true });
-      });
-    });
-  });
-});
-
-ipcMain.handle('ssh.mkdir', async (_e, { connId, path: dirPath }) => {
-  const c = SSH_CONNS.get(connId);
-  if (!c) return { ok: false, error: 'SSH_NOT_FOUND' };
-  return await new Promise((resolve) => {
-    c.sftp((err, sftp) => {
-      if (err || !sftp) return resolve({ ok: false, error: String(err?.message || err) });
-      sftp.mkdir(dirPath, (e) => {
-        if (e) return resolve({ ok: false, error: String(e?.message || e) });
-        resolve({ ok: true });
-      });
-    });
-  });
-});
-
-ipcMain.handle('ssh.createFile', async (_e, { connId, path: filePath }) => {
-  const c = SSH_CONNS.get(connId);
-  if (!c) return { ok: false, error: 'SSH_NOT_FOUND' };
-  return await new Promise((resolve) => {
-    c.sftp((err, sftp) => {
-      if (err || !sftp) return resolve({ ok: false, error: String(err?.message || err) });
-      sftp.open(filePath, 'wx', (e, handle) => {
-        if (e) return resolve({ ok: false, error: String(e?.message || e) });
-        sftp.close(handle, (ce) => {
-          if (ce) return resolve({ ok: false, error: String(ce?.message || ce) });
-          resolve({ ok: true });
-        });
-      });
-    });
-  });
 });

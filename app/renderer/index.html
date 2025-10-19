@@ -15,76 +15,231 @@
   <!-- Main Toolbar -->
   <div class="toolbar">
     <div class="toolbar-left">
-      <div class="app-title">Smarterminal</div>
-      <div class="toolbar-hint">
-        <kbd>Ctrl+Shift+C</kbd> Connect SSH •
-        <kbd>Ctrl+T</kbd> New Tab •
-        <kbd>Ctrl+,</kbd> Settings
+      <div class="app-title">
+        <img src="assets/logo.svg" alt="Smarterminal" class="app-logo" />
+        <span>Smarterminal</span>
+      </div>
+      <!-- Tab Bar -->
+      <div class="tab-bar-inline">
+        <button id="tabScrollLeft" class="tab-scroll-btn tab-scroll-left" aria-label="Scroll tabs left">
+          <svg viewBox="0 0 16 16" width="16" height="16">
+            <path fill="currentColor" d="M10.5 3.5L6 8l4.5 4.5L9 14 3 8l6-6z"/>
+          </svg>
+        </button>
+        <div class="tabs-scroll-container">
+          <div id="tabs" class="tabs"></div>
+        </div>
+        <button id="tabScrollRight" class="tab-scroll-btn tab-scroll-right" aria-label="Scroll tabs right">
+          <svg viewBox="0 0 16 16" width="16" height="16">
+            <path fill="currentColor" d="M5.5 3.5L10 8l-4.5 4.5L7 14l6-6-6-6z"/>
+          </svg>
+        </button>
       </div>
     </div>
     <div class="toolbar-right">
-      <span class="toolbar-hint" id="globalStatus">Ready</span>
-    </div>
-  </div>
-
-  <!-- Tab Bar -->
-  <div class="tab-bar">
-    <div id="tabs" class="tabs"></div>
-    <div class="tab-bar-hint">
-      <kbd>Ctrl+T</kbd> New Tab •
-      <kbd>Ctrl+W</kbd> Close Tab •
-      <kbd>Ctrl+Tab</kbd> Next Tab
     </div>
   </div>
 
   <!-- Main Content Area -->
+  <div id="homeView" class="home-view hidden">
+    <section class="home-intro">
+      <div class="home-intro-content">
+        <span class="home-intro-kicker" data-i18n="home.intro.kicker">智能终端工作台</span>
+        <h1 class="home-intro-title" data-i18n="app.title">Smarterminal</h1>
+        <p class="home-intro-subtitle" data-i18n="home.intro.subtitle">让命令行与结构化笔记在一个界面内协同，保持专注与节奏。</p>
+        <div class="home-intro-actions">
+          <button class="btn-primary home-intro-primary" type="button" data-action="new-tab" data-i18n="home.action.newChat">开始新的对话</button>
+          <button class="btn-secondary home-intro-secondary" type="button" data-scroll-target="#homeAllSection" data-i18n="home.action.browseAll">浏览全部对话</button>
+          <button class="btn-secondary home-intro-secondary" type="button" id="homeSettingsBtn" data-i18n="home.action.settings">打开设置</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="home-features-section">
+      <div class="home-features-grid">
+        <div class="home-feature-card">
+          <h3 class="home-feature-title" data-i18n="feature.smartTerminal">智能命令行</h3>
+          <p class="home-feature-desc" data-i18n="feature.smartTerminal.desc">集成AI辅助，实时命令建议与智能补全</p>
+        </div>
+        <div class="home-feature-card">
+          <h3 class="home-feature-title" data-i18n="feature.structuredNotes">结构化笔记</h3>
+          <p class="home-feature-desc" data-i18n="feature.structuredNotes.desc">Markdown支持，命令与文档完美融合</p>
+        </div>
+        <div class="home-feature-card">
+          <h3 class="home-feature-title" data-i18n="feature.sessionManagement">对话管理</h3>
+          <p class="home-feature-desc" data-i18n="feature.sessionManagement.desc">多会话并行，历史记录随时恢复</p>
+        </div>
+        <div class="home-feature-card">
+          <h3 class="home-feature-title" data-i18n="feature.dualMode">双模式切换</h3>
+          <p class="home-feature-desc" data-i18n="feature.dualMode.desc">Chat与Terminal无缝切换，适配不同场景</p>
+        </div>
+        <div class="home-feature-card">
+          <h3 class="home-feature-title" data-i18n="feature.autoSave">自动保存</h3>
+          <p class="home-feature-desc" data-i18n="feature.autoSave.desc">实时持久化，工作状态永不丢失</p>
+        </div>
+        <div class="home-feature-card">
+          <h3 class="home-feature-title" data-i18n="feature.shortcuts">高效快捷键</h3>
+          <p class="home-feature-desc" data-i18n="feature.shortcuts.desc">Shift+Enter执行，Esc清空，流畅操作</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="home-section" id="homeFavoritesSection">
+      <div class="home-section-header">
+        <div class="home-section-title-group">
+          <h2 class="home-section-title" data-i18n="section.favorites">收藏的对话</h2>
+          <span class="home-section-hint" data-i18n="section.favorites.hint">重要会话快速访问，高频任务一键恢复</span>
+        </div>
+      </div>
+      <div id="homeFavoritesEmpty" class="home-empty" data-i18n="section.favorites.empty">暂无收藏的对话。</div>
+      <div class="home-section-body">
+        <div id="homeFavoritesList" class="home-card-grid" data-home-list="favorites"></div>
+        <div id="homeFavoritesIndicators" class="home-page-indicators hidden" aria-label="收藏分页导航"></div>
+      </div>
+    </section>
+
+    <section class="home-section" id="homeAllSection">
+      <div class="home-section-header">
+        <div class="home-section-title-group">
+          <h2 class="home-section-title" data-i18n="section.all">全部对话</h2>
+          <span class="home-section-hint" data-i18n="section.all.hint">所有会话历史，随时恢复工作上下文</span>
+        </div>
+        <div class="home-section-actions">
+          <button class="home-icon-button" type="button" data-action="new-tab" aria-label="新建对话">＋</button>
+        </div>
+      </div>
+      <div id="homeAllEmpty" class="home-empty" data-i18n="section.all.empty">还没有保存的对话，点击"开始新的对话"开启第一步。</div>
+      <div class="home-section-body">
+        <div id="homeAllList" class="home-card-grid" data-home-list="all"></div>
+        <div id="homeAllIndicators" class="home-page-indicators hidden" aria-label="全部对话分页导航"></div>
+      </div>
+    </section>
+
+    <section class="home-section" id="homeRecycleSection">
+      <div class="home-section-header">
+        <div class="home-section-title-group">
+          <h2 class="home-section-title" data-i18n="section.trash">回收站</h2>
+          <span class="home-section-hint" data-i18n="section.trash.hint">临时保留的对话可随时恢复或清理</span>
+        </div>
+        <div class="home-section-actions">
+          <button id="homeRecycleClear" class="btn-secondary" type="button" data-i18n="home.action.clearTrash">清空回收站</button>
+        </div>
+      </div>
+      <div id="homeRecycleEmpty" class="home-empty" data-i18n="section.trash.empty">回收站为空。</div>
+      <div class="home-section-body">
+        <div id="homeRecycleList" class="home-card-grid" data-home-list="recycle"></div>
+        <div id="homeRecycleIndicators" class="home-page-indicators hidden" aria-label="回收站分页导航"></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Settings View -->
+  <div id="settingsView" class="settings-view hidden">
+    <div class="settings-container">
+      <div class="settings-header">
+        <button class="settings-back-button" id="settingsBackBtn" aria-label="返回首页">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
+          <span data-i18n="settings.back">返回首页</span>
+        </button>
+        <h1 class="settings-title" data-i18n="settings.title">设置</h1>
+      </div>
+
+      <div class="settings-content">
+        <!-- Language Setting -->
+        <div class="settings-section">
+          <h2 class="settings-section-title" data-i18n="settings.language">语言</h2>
+          <div class="settings-option-group">
+            <label class="settings-option">
+              <input type="radio" name="language" value="zh-CN" class="settings-radio" />
+              <span class="settings-option-label" data-i18n="settings.language.zh">中文</span>
+            </label>
+            <label class="settings-option">
+              <input type="radio" name="language" value="en" class="settings-radio" />
+              <span class="settings-option-label" data-i18n="settings.language.en">English</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Theme Setting -->
+        <div class="settings-section">
+          <h2 class="settings-section-title" data-i18n="settings.theme">主题</h2>
+          <div class="settings-option-group">
+            <label class="settings-option">
+              <input type="radio" name="theme" value="light" class="settings-radio" />
+              <span class="settings-option-label" data-i18n="settings.theme.light">亮色</span>
+            </label>
+            <label class="settings-option">
+              <input type="radio" name="theme" value="dark" class="settings-radio" />
+              <span class="settings-option-label" data-i18n="settings.theme.dark">暗色</span>
+            </label>
+            <label class="settings-option">
+              <input type="radio" name="theme" value="system" class="settings-radio" />
+              <span class="settings-option-label" data-i18n="settings.theme.system">跟随系统</span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="split" class="split">
     <!-- Chat-style Terminal Pane -->
     <div class="pane pane-terminal">
-      <div class="pane-toolbar">
-        <div class="pane-toolbar-left">
-          <span class="toolbar-hint">Ctrl+L Clear • Ctrl+K Export • Ctrl+F Find</span>
-        </div>
-        <div class="pane-toolbar-right">
-          <button id="terminalModeToggle" class="icon-btn" title="Toggle Terminal Mode (Chat/Classic)">
-            <span id="terminalModeIcon">💬</span>
-          </button>
-          <span class="status-indicator" id="connectionStatus">
-            <span class="status-dot local"></span>
-            <span class="status-text">Local</span>
-          </span>
-        </div>
-      </div>
 
       <!-- Chat Messages Container -->
       <div class="chat-container" id="chatContainer">
-        <div class="chat-messages" id="chatMessages">
-          <!-- Welcome message -->
-          <div class="system-message">
-            <div class="message-icon">🚀</div>
-            <div class="message-content">
-              <div class="message-text">Welcome to Smarterminal</div>
-              <div class="message-hint">
-                Type a command below •
-                <kbd>Ctrl+Space</kbd> Suggestions •
-                <kbd>Ctrl+L</kbd> Clear •
-                <kbd>Ctrl+K</kbd> Export
-              </div>
-            </div>
+        <div class="chat-title hidden" id="chatTitle">
+          <div class="chat-title-display" id="chatTitleDisplay">
+            <span class="chat-title-text" id="chatTitleText">未命名对话</span>
+            <span class="chat-title-hint" id="chatTitleHint" data-i18n="chat.title.hint">双击重命名 • Enter 保存</span>
+          </div>
+          <div class="chat-title-editor hidden" id="chatTitleEditor">
+            <input
+              id="chatTitleInput"
+              class="chat-title-input"
+              type="text"
+              maxlength="120"
+              autocomplete="off"
+              placeholder="输入对话名称"
+              data-i18n-placeholder="chat.title.placeholder"
+            />
           </div>
         </div>
-      </div>
-
-      <!-- Traditional xterm.js terminal (temporary, will be replaced) -->
-      <div id="term" class="term-container" style="flex: 1; display: block;"></div>
-
-      <!-- Command Input Area (Fixed at bottom) -->
-      <div class="command-input-wrapper">
-        <div class="command-input-container">
-          <div class="input-prefix">
-            <span class="prompt-symbol">$</span>
-            <span class="current-path" id="currentPath">~</span>
+        <div class="chat-description hidden" id="chatDescription">
+            <div class="chat-description-header">
+              <div class="chat-description-title" id="chatDescriptionTitle" data-i18n="chat.description.title">对话说明</div>
+              <div class="chat-description-hint" id="chatDescriptionHint" data-i18n="chat.description.hint">双击编辑 • Shift+Enter 保存</div>
           </div>
+          <div class="chat-description-body" id="chatDescriptionBody">
+            <div class="chat-description-empty" id="chatDescriptionEmpty" data-i18n="chat.description.empty">暂无说明，双击此处添加。</div>
+          </div>
+          <div class="chat-description-editor hidden" id="chatDescriptionEditor">
+            <textarea
+              id="chatDescriptionInput"
+              class="chat-description-textarea"
+              rows="4"
+              placeholder="使用 Markdown 描述这个对话的目的、上下文或使用方式..."
+              data-i18n-placeholder="chat.description.placeholder"
+            ></textarea>
+          </div>
+        </div>
+        <div class="chat-messages" id="chatMessages">
+        </div>
+
+        <div class="chat-scroll-controls hidden" id="chatScrollControls">
+          <button id="scrollToTopBtn" class="chat-scroll-btn" title="回到顶部" data-i18n-title="chat.scroll.top">↑</button>
+          <button id="scrollToBottomBtn" class="chat-scroll-btn" title="滚动到底" data-i18n-title="chat.scroll.bottom">↓</button>
+        </div>
+
+        <!-- Command Input Area -->
+        <div class="command-input-wrapper">
+          <div class="command-input-container">
+            <div class="input-prefix">
+              <span class="prompt-symbol">In [1]:</span>
+              <span class="current-path" id="currentPath">~</span>
+            </div>
           <textarea
             id="commandInput"
             class="command-input"
@@ -103,62 +258,24 @@
           <div class="suggestions-list" id="suggestionsList"></div>
         </div>
       </div>
-    </div>
-
-    <!-- Draggable Divider -->
-    <div id="divider" class="divider" title="Drag to resize"></div>
-
-    <!-- File Explorer Pane -->
-    <div class="pane pane-files">
-      <div class="pane-toolbar">
-        <div class="pane-toolbar-left">
-          <span class="path-breadcrumb">
-            <span id="scopeBadge" class="scope-badge local">Local</span>
-            <span id="cwdLabel" class="path-text">/</span>
-          </span>
-        </div>
-        <div class="pane-toolbar-right">
-          <button id="uploadBtn" class="icon-btn" title="Upload files (SSH only)" style="display:none;">⬆️</button>
-          <span class="toolbar-hint">F5 Refresh • Ctrl+U Upload • Ctrl+D Download</span>
-        </div>
-      </div>
-      <div class="file-explorer">
-        <div class="file-table">
-          <div class="file-table-header">
-            <div class="col-name">Name</div>
-            <div class="col-size">Size</div>
-            <div class="col-modified">Modified</div>
-            <div class="col-type">Type</div>
+        
+        <!-- Chat Context Menu -->
+        <div id="chatContextMenu" class="context-menu hidden">
+          <div class="context-menu-item" data-action="copy">
+            <span>Copy</span>
           </div>
-          <div class="file-table-body" id="fileTbody"></div>
+          <div class="context-menu-item" data-action="selectAll">
+            <span>Select All</span>
+          </div>
         </div>
       </div>
+
+      <!-- Traditional xterm.js terminal (temporary, will be replaced) -->
+      <div id="term" class="term-container" style="flex: 1; display: block;"></div>
     </div>
   </div>
 
-  <!-- Status Bar -->
-  <div class="statusbar" id="statusbar">
-    <div class="statusbar-left">
-      <div class="statusbar-item" id="statusConnection">
-        <span class="status-dot local"></span>
-        <span>Local Shell</span>
-      </div>
-      <div class="statusbar-item" id="statusPath">~</div>
-    </div>
-    <div class="statusbar-center">
-      <button class="statusbar-toggle" id="filePanelToggle" title="Click to toggle file explorer">
-        <span class="toggle-icon">▲</span>
-        <span class="toggle-label">File Explorer</span>
-      </button>
-    </div>
-    <div class="statusbar-right">
-      <div class="statusbar-item" id="statusTransfers">
-        <span>Transfers: 0</span>
-      </div>
-      <div class="statusbar-item" id="statusEncoding">UTF-8</div>
-    </div>
-  </div>
-
+  
   <!-- Transfer Drawer -->
   <div id="txDrawer" class="transfer-drawer hidden">
     <div class="transfer-drawer-header">
@@ -169,81 +286,6 @@
       </div>
     </div>
     <div id="txList" class="transfer-list"></div>
-  </div>
-
-  <!-- SSH Connect Modal -->
-  <div id="connectModal" class="modal hidden">
-    <div class="modal-backdrop"></div>
-    <div class="modal-dialog">
-      <div class="modal-header">
-        <h3 class="modal-title">SSH Connection</h3>
-      </div>
-      <div class="modal-body">
-        <div class="form-group">
-          <label class="form-label">Host</label>
-          <input id="sshHost" type="text" class="form-input" placeholder="example.com"/>
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">Port</label>
-            <input id="sshPort" type="number" class="form-input" value="22"/>
-          </div>
-          <div class="form-group" style="flex: 2;">
-            <label class="form-label">Username</label>
-            <input id="sshUser" type="text" class="form-input" placeholder="root"/>
-          </div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Password</label>
-          <input id="sshPass" type="password" class="form-input" placeholder="Leave empty to use key"/>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Private Key</label>
-          <div class="input-group">
-            <input id="sshKeyPath" type="text" class="form-input" placeholder="~/.ssh/id_ed25519"/>
-            <button id="sshKeyBrowse" class="btn-secondary" type="button">Browse</button>
-          </div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Key Passphrase</label>
-          <input id="sshKeyPass" type="password" class="form-input" placeholder="If key is encrypted"/>
-        </div>
-        <div class="form-group">
-          <label class="form-checkbox">
-            <input id="sshAgentFwd" type="checkbox"/>
-            <span>Forward SSH Agent</span>
-          </label>
-        </div>
-        <div id="sshHint" class="alert alert-warning hidden">
-          <strong>SSH library not available.</strong> Run <code>npm i ssh2</code> then restart.
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button id="sshCancel" class="btn-secondary" type="button">Cancel</button>
-        <button id="sshConnect" class="btn-primary" type="button">Connect</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Host Key Verification Modal -->
-  <div id="hostkeyModal" class="modal hidden">
-    <div class="modal-backdrop"></div>
-    <div class="modal-dialog modal-sm">
-      <div class="modal-header">
-        <h3 class="modal-title">Host Key Verification</h3>
-      </div>
-      <div class="modal-body">
-        <p id="hkText" class="text-secondary"></p>
-        <div class="fingerprint-box">
-          <code id="hkFp" class="fingerprint"></code>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button id="hkCancel" class="btn-secondary" type="button">Cancel</button>
-        <button id="hkOnce" class="btn-secondary" type="button">Trust Once</button>
-        <button id="hkPersist" class="btn-primary" type="button">Trust & Save</button>
-      </div>
-    </div>
   </div>
 
   <!-- File Context Menu -->
@@ -298,96 +340,7 @@
     </div>
   </div>
 
-  <!-- Keyboard Shortcuts Help Modal -->
-  <div id="shortcutsModal" class="modal hidden">
-    <div class="modal-backdrop"></div>
-    <div class="modal-dialog" style="max-width: 800px;">
-      <div class="modal-header">
-        <h3 class="modal-title">Keyboard Shortcuts</h3>
-        <button class="icon-btn" id="shortcutsClose" title="Close">✕</button>
-      </div>
-      <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
-        <div class="shortcuts-grid">
-          <div class="shortcuts-section">
-            <h4 class="shortcuts-section-title">General</h4>
-            <div class="shortcut-item">
-              <kbd>Ctrl/Cmd+K</kbd>
-              <span>Command Palette</span>
-            </div>
-            <div class="shortcut-item">
-              <kbd>Ctrl/Cmd+,</kbd>
-              <span>Settings</span>
-            </div>
-            <div class="shortcut-item">
-              <kbd>F1</kbd>
-              <span>Show Shortcuts</span>
-            </div>
-          </div>
-
-          <div class="shortcuts-section">
-            <h4 class="shortcuts-section-title">Tabs</h4>
-            <div class="shortcut-item">
-              <kbd>Ctrl/Cmd+T</kbd>
-              <span>New Tab</span>
-            </div>
-            <div class="shortcut-item">
-              <kbd>Ctrl/Cmd+W</kbd>
-              <span>Close Tab</span>
-            </div>
-            <div class="shortcut-item">
-              <kbd>Ctrl+Tab</kbd>
-              <span>Next Tab</span>
-            </div>
-            <div class="shortcut-item">
-              <kbd>Ctrl+Shift+Tab</kbd>
-              <span>Previous Tab</span>
-            </div>
-          </div>
-
-          <div class="shortcuts-section">
-            <h4 class="shortcuts-section-title">SSH</h4>
-            <div class="shortcut-item">
-              <kbd>Ctrl/Cmd+Shift+C</kbd>
-              <span>SSH Connect</span>
-            </div>
-          </div>
-
-          <div class="shortcuts-section">
-            <h4 class="shortcuts-section-title">Terminal</h4>
-            <div class="shortcut-item">
-              <kbd>Ctrl/Cmd+L</kbd>
-              <span>Clear Terminal</span>
-            </div>
-          </div>
-
-          <div class="shortcuts-section">
-            <h4 class="shortcuts-section-title">File Operations</h4>
-            <div class="shortcut-item">
-              <kbd>F5</kbd>
-              <span>Refresh Files</span>
-            </div>
-            <div class="shortcut-item">
-              <kbd>F2</kbd>
-              <span>Rename File</span>
-            </div>
-            <div class="shortcut-item">
-              <kbd>Delete</kbd>
-              <span>Delete File(s)</span>
-            </div>
-            <div class="shortcut-item">
-              <kbd>Ctrl/Cmd+U</kbd>
-              <span>Upload Files (SSH)</span>
-            </div>
-            <div class="shortcut-item">
-              <kbd>Ctrl/Cmd+D</kbd>
-              <span>Download Files (SSH)</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
+  
   <!-- File Conflict Resolution Modal -->
   <div id="conflictModal" class="modal hidden">
     <div class="modal-backdrop"></div>
@@ -409,6 +362,22 @@
         <button id="conflictCancel" class="btn-secondary" type="button">Cancel</button>
         <button id="conflictRename" class="btn-secondary" type="button">Rename</button>
         <button id="conflictOverwrite" class="btn-primary" type="button">Overwrite</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="confirmModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle" aria-describedby="confirmModalMessage">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog modal-sm">
+      <div class="modal-header">
+        <h3 class="modal-title" id="confirmModalTitle" data-i18n="modal.confirm.title">请确认</h3>
+      </div>
+      <div class="modal-body">
+        <p id="confirmModalMessage" class="modal-message"></p>
+      </div>
+      <div class="modal-footer">
+        <button id="confirmModalCancel" class="btn-secondary" type="button" data-i18n="modal.confirm.cancel">取消</button>
+        <button id="confirmModalOk" class="btn-primary" type="button" data-i18n="modal.confirm.ok">确定</button>
       </div>
     </div>
   </div>

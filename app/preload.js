@@ -24,20 +24,12 @@ contextBridge.exposeInMainWorld('sm', {
   settings: { get: () => invoke('settings.get'), set: (p) => invoke('settings.set', p) },
   session: { load: () => invoke('session.load'), save: (s) => invoke('session.save', s) },
   openExternal: (url) => invoke('app.openExternal', url)
-  , ssh: {
-    available: () => invoke('ssh.available'),
-    connect: (p) => invoke('ssh.connect', p),
-    disconnect: (p) => invoke('ssh.disconnect', p),
-    openShell: (p) => invoke('ssh.openShell', p),
-    writeShell: (p) => invoke('ssh.writeShell', p),
-    resizeShell: (p) => invoke('ssh.resizeShell', p),
-    sftpList: (p) => invoke('ssh.sftpList', p),
-    rename: (p) => invoke('ssh.rename', p),
-    delete: (p) => invoke('ssh.delete', p),
-    mkdir: (p) => invoke('ssh.mkdir', p),
-    createFile: (p) => invoke('ssh.createFile', p),
-    trustHost: (p) => invoke('ssh.trustHost', p),
-    onHostkey: (cb) => ipcRenderer.on('evt.ssh.hostkey', (_e, m) => cb(m))
+  , tabs: {
+    list: () => invoke('tabs.list'),
+    create: (payload) => invoke('tabs.create', payload),
+    save: (payload) => invoke('tabs.save', payload),
+    rename: (payload) => invoke('tabs.rename', payload),
+    remove: (payload) => invoke('tabs.delete', payload)
   }
   , tx: {
     enqueue: (t) => invoke('tx.enqueue', t),

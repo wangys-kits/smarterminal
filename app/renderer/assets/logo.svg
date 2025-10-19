@@ -1,0 +1,38 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Terminal window background -->
+  <rect x="2" y="4" width="28" height="24" rx="3" fill="url(#terminal-gradient)" stroke="url(#border-gradient)" stroke-width="1.5"/>
+
+  <!-- Command prompt symbol -->
+  <path d="M7 11 L10.5 14 L7 17" stroke="#4FC3F7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Smart indicator dot (AI/智能) -->
+  <circle cx="25" cy="8" r="2.5" fill="#00E676">
+    <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- Cursor line -->
+  <line x1="13" y1="14" x2="18" y2="14" stroke="#81C784" stroke-width="2" stroke-linecap="round">
+    <animate attributeName="opacity" values="1;0.2;1" dur="1s" repeatCount="indefinite"/>
+  </line>
+
+  <!-- Neural network connection lines (subtle智能元素) -->
+  <g opacity="0.3" stroke="#4FC3F7" stroke-width="0.8">
+    <line x1="6" y1="22" x2="10" y2="20"/>
+    <line x1="10" y1="20" x2="14" y2="22"/>
+    <line x1="14" y1="22" x2="18" y2="20"/>
+    <line x1="18" y1="20" x2="22" y2="22"/>
+    <line x1="22" y1="22" x2="26" y2="20"/>
+  </g>
+
+  <!-- Gradients -->
+  <defs>
+    <linearGradient id="terminal-gradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1A237E"/>
+      <stop offset="100%" stop-color="#0D1B2A"/>
+    </linearGradient>
+    <linearGradient id="border-gradient" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#4FC3F7"/>
+      <stop offset="100%" stop-color="#00E676"/>
+    </linearGradient>
+  </defs>
+</svg>
