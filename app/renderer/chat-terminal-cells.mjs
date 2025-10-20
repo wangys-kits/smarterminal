@@ -124,16 +124,16 @@ export class CellManager {
     stopBtn.className = 'cell-control-btn control-stop';
     stopBtn.dataset.action = 'stop';
     stopBtn.disabled = true;
-    stopBtn.textContent = '停止';
-    stopBtn.title = '停止当前命令 (Ctrl+C)';
+    stopBtn.textContent = 'Stop';
+    stopBtn.title = 'Stop current command (Ctrl+C)';
 
     const copyBtn = document.createElement('button');
     copyBtn.type = 'button';
     copyBtn.className = 'cell-control-btn control-copy';
     copyBtn.dataset.action = 'copy';
     copyBtn.disabled = true;
-    copyBtn.textContent = '复制';
-    copyBtn.title = '复制输出内容';
+    copyBtn.textContent = 'Copy';
+    copyBtn.title = 'Copy output content';
 
     controlContent.append(stopBtn, copyBtn);
     controlRow.append(controlPrompt, controlContent);

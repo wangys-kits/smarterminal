@@ -845,6 +845,12 @@ body {
   margin: 0 auto var(--space-xl);
   padding: var(--space-md);
   box-shadow: var(--shadow-sm, 0 8px 20px rgba(0, 0, 0, 0.08));
+  transition: all var(--transition-fast);
+}
+
+.command-input-wrapper:hover {
+  box-shadow: var(--shadow-md, 0 12px 28px rgba(0, 0, 0, 0.12));
+  border-color: var(--border-hover, var(--color-accent));
 }
 
 .command-input-container {
@@ -881,34 +887,88 @@ body {
 
 .command-input {
   flex: 1;
-  min-height: 32px;
+  min-height: 40px;
   max-height: 200px;
-  padding: var(--space-xs) var(--space-sm);
-  border: 1px solid var(--border-primary);
-  background: var(--bg-primary);
+  padding: var(--space-sm) var(--space-md);
+  border: 2px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
   color: var(--text-primary);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-md);
   line-height: var(--line-height-normal);
   resize: none;
   overflow-y: auto;
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  transition: all var(--transition-fast);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05);
+  position: relative;
+}
+
+/* Editable state indicator - subtle gradient overlay */
+.command-input::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg,
+    var(--color-accent) 0%,
+    transparent 50%,
+    var(--color-accent) 100%);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  pointer-events: none;
+}
+
+.command-input:hover {
+  border-color: var(--border-hover, var(--color-accent));
+  background: var(--bg-elevated, var(--bg-secondary));
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05),
+              0 0 0 1px rgba(49, 106, 197, 0.1);
 }
 
 .command-input.command-input-busy {
-  border-color: var(--border-warning, var(--border-focus));
-  box-shadow: 0 0 0 1px rgba(255, 170, 0, 0.2);
-  background: var(--bg-elevated, var(--bg-primary));
+  border-color: var(--border-warning, #FFAA00);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05),
+              0 0 0 3px rgba(255, 170, 0, 0.15);
+  background: var(--bg-elevated, var(--bg-secondary));
+  animation: pulse-border 2s ease-in-out infinite;
+}
+
+@keyframes pulse-border {
+  0%, 100% {
+    border-color: var(--border-warning, #FFAA00);
+  }
+  50% {
+    border-color: rgba(255, 170, 0, 0.6);
+  }
 }
 
 .command-input:focus {
   outline: none;
-  border-color: var(--border-focus);
-  box-shadow: 0 0 0 2px rgba(49, 106, 197, 0.2);
+  border-color: var(--color-accent);
+  background: var(--bg-primary);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05),
+              0 0 0 3px rgba(49, 106, 197, 0.2),
+              0 4px 12px rgba(49, 106, 197, 0.1);
+}
+
+.command-input:focus::before {
+  opacity: 1;
 }
 
 .command-input::placeholder {
   color: var(--text-tertiary);
+  font-style: italic;
+  opacity: 0.7;
+}
+
+/* Visual indicator for editable state */
+.command-input-wrapper:hover .command-input {
+  border-color: var(--color-accent);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05),
+              0 0 0 1px rgba(49, 106, 197, 0.15);
 }
 
 @media (max-width: 1024px) {

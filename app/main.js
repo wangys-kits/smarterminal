@@ -168,10 +168,39 @@ ipcMain.handle('term.spawn', (event, args) => {
       proc.onData(data => { try { event.sender.send('evt.term.data', { ptyId, data }); } catch (_) {} });
       proc.onExit(e => { try { event.sender.send('evt.term.exit', { ptyId, code: e.exitCode, signal: e.signal }); } catch (_) {} PTYS.delete(ptyId); });
     } else {
-      // Fallback stdio shell (limited; no TTY features)
-      const sh = process.platform === 'win32' ? shellExe : shellExe;
-      const spawnArgs = process.platform === 'win32' ? ['-NoLogo'] : ['-i'];
-      proc = spawn(sh, spawnArgs, { cwd: cwd || os.homedir(), env });
+      // Fallback strategy without node-pty:
+      // 1) Try to wrap the shell with 'script' to simulate a TTY; this gives
+      //    us interactive behavior without node-pty.
+      // 2) If 'script' is unavailable, fall back to bash/sh reading from stdin.
+      let spawned = false;
+      if (process.platform !== 'win32') {
+        const scriptExe = findExecutable('/usr/bin/script') || findExecutable('/bin/script') || findExecutable('script');
+        const bashExe = findExecutable('/bin/bash') || findExecutable('/usr/bin/bash') || shellExe;
+        if (scriptExe && bashExe) {
+          try {
+            // -q: quiet, /dev/null: skip transcript file
+            proc = spawn(scriptExe, ['-q', '/dev/null', bashExe, '-i'], { cwd: cwd || os.homedir(), env });
+            spawned = true;
+          } catch (_) { spawned = false; }
+        }
+      }
+
+      if (!spawned) {
+        // Fallback stdio shell (limited; no TTY features). Prefer a shell that reads stdin.
+        let sh = shellExe;
+        let spawnArgs = [];
+        if (process.platform === 'win32') {
+          spawnArgs = ['-NoLogo'];
+        } else {
+          const bash = findExecutable('/bin/bash') || findExecutable('/usr/bin/bash');
+          const shBin = findExecutable('/bin/sh') || findExecutable('/usr/bin/sh');
+          if (bash) { sh = bash; spawnArgs = ['-s']; }
+          else if (shBin) { sh = shBin; spawnArgs = ['-s']; }
+          else { sh = shellExe; spawnArgs = ['-s']; }
+          env.PS1 = '';
+        }
+        proc = spawn(sh, spawnArgs, { cwd: cwd || os.homedir(), env });
+      }
       PTYS.set(ptyId, proc);
       proc.stdout.on('data', buf => { try { event.sender.send('evt.term.data', { ptyId, data: buf.toString('utf8') }); } catch (_) {} });
       proc.stderr.on('data', buf => { try { event.sender.send('evt.term.data', { ptyId, data: buf.toString('utf8') }); } catch (_) {} });
@@ -182,13 +211,20 @@ ipcMain.handle('term.spawn', (event, args) => {
     return { ok: false, error: String(err?.message || err) };
   }
 
-  return { ok: true, data: { ptyId } };
+  return { ok: true, data: { ptyId, mode: pty ? 'pty' : 'stdio' } };
 });
 
 ipcMain.handle('term.write', (_e, { ptyId, data }) => {
   const p = PTYS.get(ptyId);
   if (!p) return { ok: false, error: 'PTY_NOT_FOUND' };
-  if (p.write) p.write(data); else if (p.stdin) p.stdin.write(data);
+  // If we are using real PTY, write as-is. If we are on fallback stdio shell,
+  // translate carriage return to newline so non-tty shells actually execute.
+  if (p.write) {
+    p.write(data);
+  } else if (p.stdin) {
+    const payload = typeof data === 'string' ? data.replace(/\r/g, '\n') : data;
+    try { p.stdin.write(payload); } catch (_) {}
+  }
   return { ok: true };
 });
 

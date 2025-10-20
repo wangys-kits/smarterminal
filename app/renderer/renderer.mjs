@@ -2023,10 +2023,17 @@ async function addNewTab(options = {}) {
     chatTerm.saveMessageHistory();
   }
 
-  const spawnRes = await sm.term.spawn({ tabId: id, cols: 120, rows: 30, preferUTF8: true });
+  // Prefer bash on POSIX to avoid zsh reading-from-stdin quirks when PTY is unavailable
+  const isWin = navigator.platform.toLowerCase().includes('win');
+  const preferredShell = isWin ? null : '/bin/bash';
+  const spawnRes = await sm.term.spawn({ tabId: id, cols: 120, rows: 30, preferUTF8: true, shellName: preferredShell });
   if (!spawnRes.ok) { alert('Failed to spawn terminal: ' + spawnRes.error); return; }
-  const { ptyId } = spawnRes.data;
-  const writer = (d) => sm.term.write({ ptyId, data: d });
+  const { ptyId, mode: termMode } = spawnRes.data;
+  try { if (window?.localStorage?.getItem('sm.debugTerm')) console.log('[term.spawn] ptyId', ptyId); } catch (_) {}
+  const writer = (d) => {
+    try { if (window?.localStorage?.getItem('sm.debugTerm')) console.log('[term.write]', { bytes: (d||'').length }); } catch (_) {}
+    return sm.term.write({ ptyId, data: d });
+  };
   const resizer = (c, r) => sm.term.resize({ ptyId, cols: c, rows: r });
 
   // Connect chat terminal to writer
@@ -2041,6 +2048,12 @@ async function addNewTab(options = {}) {
   // Handle data from PTY - send to both xterm and chat terminal
   sm.term.onData(m => {
     if (m.ptyId === ptyId) {
+      // Lightweight debug hook without flooding: toggle via localStorage 'sm.debugTerm'
+      try {
+        if (window?.localStorage?.getItem('sm.debugTerm')) {
+          console.log('[renderer term.onData]', { bytes: (m.data||'').length });
+        }
+      } catch (_) {}
       handleTermData(id, term, chatTerm, m.data);
     }
   });
@@ -2079,6 +2092,7 @@ async function addNewTab(options = {}) {
     title: effectiveTitle,
     fileName,
     ptyId,
+    mode: termMode || 'pty',
     cwd: home,
     term,
     chatTerm,
@@ -2090,7 +2104,9 @@ async function addNewTab(options = {}) {
     customTitle: Boolean(initialCustomTitle),
     deleted: false,
     deletedAt: null,
-    terminalReady: true  // Mark as ready immediately after PTY spawn
+    // Don't mark as ready until listeners are fully attached to avoid race
+    // where a fast first command runs before onData routing is installed.
+    terminalReady: false
   };
 
   chatTerm.setChangeHandler(() => {
@@ -2107,6 +2123,12 @@ async function addNewTab(options = {}) {
   }
 
   updateCurrentPathDisplay();
+  // Now that event handlers are wired, mark the terminal as ready.
+  // This prevents the user from issuing a command before onData routing exists.
+  const justAdded = state.tabs.find(t => t.id === id);
+  if (justAdded) {
+    justAdded.terminalReady = true;
+  }
   persistOpenTabs();
   scheduleScrollUpdate();
 }
@@ -2261,6 +2283,18 @@ window.addEventListener('resize', () => fitTerminalToPane());
 
 
 function handleTermData(tabId, term, chatTerm, data) {
+  // As soon as we see any data for this tab, consider the terminal plumbing ready.
+  // This complements the SM_CWD-based readiness below and avoids races.
+  const tabForReady = state.tabs.find(t => t.id === tabId);
+  if (tabForReady && !tabForReady.terminalReady) {
+    tabForReady.terminalReady = true;
+    try { console.log(`[terminal] Tab ${tabId} received data; marked ready`); } catch (_) {}
+  }
+  let promptDetected = false;
+  const rawData = data;
+  if (rawData && (/\x1b\]133;[CD]/.test(rawData) || /\x1b\[\?2004l/.test(rawData))) {
+    promptDetected = true;
+  }
   // Handle CWD updates
   const idx = data.indexOf('SM_CWD:');
   if (idx >= 0) {
@@ -2306,6 +2340,7 @@ function handleTermData(tabId, term, chatTerm, data) {
 
     // Remove CWD data from what's displayed to avoid showing it in terminal
     data = data.replace(/\r?\n?SM_CWD:.*\r?\n?/, '');
+    promptDetected = true;
   }
 
   // Detect interactive sentinel to return to chat mode automatically
@@ -2342,6 +2377,9 @@ function handleTermData(tabId, term, chatTerm, data) {
   if (state.useChatMode && chatTerm) {
     if (state.activeId === tabId) {
       chatTerm.handleTerminalOutput(data);
+      if (promptDetected) {
+        chatTerm.handlePromptReady();
+      }
     } else {
       const activeTab = getActiveTab();
       const activeTerm = activeTab?.chatTerm;
@@ -2350,6 +2388,9 @@ function handleTermData(tabId, term, chatTerm, data) {
       }
       chatTerm.restoreMessageHistory();
       chatTerm.handleTerminalOutput(data);
+      if (promptDetected) {
+        chatTerm.handlePromptReady();
+      }
       chatTerm.saveMessageHistory();
       if (activeTerm) {
         activeTerm.restoreMessageHistory();

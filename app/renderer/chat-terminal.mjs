@@ -5,6 +5,7 @@ import { CommandSuggestions } from './chat-terminal-suggestions.mjs';
 import { CellManager } from './chat-terminal-cells.mjs';
 
 export const INTERACTIVE_SENTINEL = '__SMRT_INTERACTIVE_DONE__';
+const COMMAND_DONE_SENTINEL_PREFIX = '__SMRT_DONE__';
 
 export class ChatTerminal {
   constructor(container, inputEl, messagesEl, statusEl) {
@@ -58,6 +59,38 @@ export class ChatTerminal {
     document.addEventListener('mousedown', this.handleDocumentClick);
     if (this.container) {
       this.container.addEventListener('scroll', this.handleWindowResize);
+    }
+
+    this.commandSentinelCounter = 0;
+
+    // Debug logging toggle: enable by running in DevTools
+    //   localStorage.setItem('sm.debugTerm', '1');  // enable
+    //   localStorage.removeItem('sm.debugTerm');    // disable
+    this.debugEnabled = false;
+    try {
+      this.debugEnabled = Boolean(
+        (window && window.localStorage && window.localStorage.getItem('sm.debugTerm')) ||
+        (window && window.smDebugTerm)
+      );
+    } catch (_) {}
+    try {
+      // Provide a simple runtime toggle without reload
+      if (typeof window !== 'undefined') {
+        window.setSmDebug = (on) => {
+          try { if (on) localStorage.setItem('sm.debugTerm', '1'); else localStorage.removeItem('sm.debugTerm'); } catch (_) {}
+          window.smDebugTerm = !!on;
+          this.debugEnabled = !!on;
+          console.log(this._debugPrefix(), 'debug', on ? 'enabled' : 'disabled');
+        };
+      }
+    } catch (_) {}
+    this._debugPrefix = () => {
+      const ts = new Date().toISOString().split('T')[1].replace('Z','');
+      return `[chat-term ${ts}]`;
+    };
+    this.dbg = (...args) => { if (this.debugEnabled) console.log(this._debugPrefix(), ...args); };
+    if (this.debugEnabled) {
+      try { console.log(this._debugPrefix(), 'debug enabled'); } catch (_) {}
     }
   }
 
@@ -333,10 +366,13 @@ export class ChatTerminal {
 
   sendInterruptSignal() {
     // Send Ctrl+C (SIGINT) to the terminal
+    this.dbg('sendInterruptSignal called', { hasWriter: !!this.writer });
     if (this.writer) {
       // Send the interrupt character (Ctrl+C = \x03)
+      this.dbg('Sending Ctrl+C (\\x03) to terminal');
       this.writer('\x03');
     } else {
+      this.dbg('No writer available');
       this.addErrorMessage('No active terminal connection');
     }
   }
@@ -505,9 +541,16 @@ export class ChatTerminal {
     this.selectCell(cellEl);
     this.updateInputAffordances();
 
+    // Check if this is part of a rerun operation
+    const isRerun = cellContext?.fromRerun || false;
+
     if (!insertBefore && !replace && !insertAfter) {
-      this.scrollToBottom();
-    } else if (typeof cellEl.scrollIntoView === 'function') {
+      // Only scroll for new commands, not reruns
+      if (!isRerun) {
+        this.scrollToBottom();
+      }
+    } else if (typeof cellEl.scrollIntoView === 'function' && !isRerun) {
+      // Only scroll into view for non-rerun operations
       cellEl.scrollIntoView({ block: 'center', inline: 'nearest' });
     }
 
@@ -528,7 +571,8 @@ export class ChatTerminal {
       insertAfter = null,
       replace = null,
       allowEmpty = false,
-      startEditing = false
+      startEditing = false,
+      fromRerun = false
     } = options || {};
 
     const result = this.cellManager.createMarkdownCell(markdownText, options);
@@ -554,8 +598,10 @@ export class ChatTerminal {
     this.selectCell(cellEl);
 
     if (!insertBefore && !replace && !insertAfter) {
-      this.scrollToBottom();
-    } else if (typeof cellEl.scrollIntoView === 'function') {
+      if (!fromRerun) {
+        this.scrollToBottom();
+      }
+    } else if (typeof cellEl.scrollIntoView === 'function' && !fromRerun) {
       cellEl.scrollIntoView({ block: 'center', inline: 'nearest' });
     }
 
@@ -734,9 +780,24 @@ export class ChatTerminal {
   }
 
   handleStopRequest(cellContext) {
-    if (!cellContext) return;
+    if (!cellContext) {
+      this.dbg('handleStopRequest: no cellContext');
+      return;
+    }
+
+    this.dbg('handleStopRequest', {
+      isCommandRunning: this.isCommandRunning,
+      hasCurrentCommand: !!this.currentCommand,
+      contextMatch: this.currentCommand?.cellContext === cellContext,
+      currentCellId: this.currentCommand?.cellContext?.cellId,
+      requestCellId: cellContext?.cellId
+    });
+
     if (this.isCommandRunning && this.currentCommand?.cellContext === cellContext) {
+      this.dbg('Sending interrupt signal');
       this.sendInterruptSignal();
+    } else {
+      this.dbg('Stop request ignored - conditions not met');
     }
   }
 
@@ -793,16 +854,43 @@ export class ChatTerminal {
     }
   }
 
-  selectCell(cellEl) {
+  selectCell(cellEl, options = {}) {
     if (!cellEl) return;
     if (this.selectedCell === cellEl) return;
 
+    const { preventScroll = false } = options;
+
     this.clearComposerSelection();
+
+    // Clear previous selection - remove 'selected' class from all cells first
+    if (this.messages) {
+      const allCells = this.messages.querySelectorAll('.notebook-cell.selected');
+      allCells.forEach(cell => {
+        cell.classList.remove('selected');
+      });
+    }
+
+    // Then update the tracked selected cell
     if (this.selectedCell) {
       this.selectedCell.classList.remove('selected');
     }
+
     this.selectedCell = cellEl;
     this.selectedCell.classList.add('selected');
+
+    // If preventScroll is true, ensure the cell doesn't scroll into view
+    // This is useful for rerun operations where we want to stay in place
+    if (preventScroll) {
+      // Store current scroll position
+      const container = this.container;
+      if (container) {
+        const scrollTop = container.scrollTop;
+        // Restore scroll position after any potential scroll from selection
+        requestAnimationFrame(() => {
+          container.scrollTop = scrollTop;
+        });
+      }
+    }
   }
 
   clearCellSelection() {
@@ -1001,7 +1089,13 @@ export class ChatTerminal {
     `;
 
     outputBody.appendChild(loadingEl);
-    this.scrollToBottom();
+
+    // Don't auto-scroll for rerun commands
+    const fromRerun = this.currentCommand?.fromRerun || false;
+    if (!fromRerun) {
+      this.scrollToBottom();
+    }
+
     this.updateControlButtonStates(cellContext);
     return loadingEl;
   }
@@ -1098,7 +1192,12 @@ export class ChatTerminal {
       cellContext = this.addUserMessage(command);
     }
 
-    this.selectCell(cellContext.cellEl);
+    // Store fromRerun flag in cellContext for later use
+    cellContext.fromRerun = fromRerun;
+    this.dbg('runShellCommand', { command, fromRerun });
+
+    // For rerun commands, prevent scroll when selecting the cell
+    this.selectCell(cellContext.cellEl, { preventScroll: fromRerun });
 
     cellContext.command = command;
     if (cellContext.commandPre) {
@@ -1122,7 +1221,7 @@ export class ChatTerminal {
       cellContext.controlPrompt.textContent = 'Ctl [*]:';
     }
 
-    this.commandQueue.push({ command, cellContext });
+    this.commandQueue.push({ command, cellContext, fromRerun });
     this.updateControlButtonStates(cellContext);
     this.processCommandQueue();
   }
@@ -1134,7 +1233,7 @@ export class ChatTerminal {
     this.startQueuedCommand(next);
   }
 
-  startQueuedCommand({ command, cellContext }) {
+  startQueuedCommand({ command, cellContext, fromRerun = false }) {
     if (!cellContext) return;
 
     if (cellContext.collapsed) {
@@ -1161,6 +1260,16 @@ export class ChatTerminal {
     }
 
     try {
+      // Adapt commands for environment (e.g., ssh needs TTY when no PTY available)
+      const adapted = this.adaptCommandForEnvironment(command);
+      const escapedCommand = this.escapeShellCommand(adapted);
+      const sentinelId = this.createCommandSentinelId();
+
+      // Check if this is an interactive command
+      const isInteractiveCommand = /^\s*(ssh|telnet|nc|netcat|mysql|psql|mongo|redis-cli|python|node|irb|rails\s+console)\s+/i.test(adapted);
+
+      const commandWithSentinel = this.appendCommandSentinel(escapedCommand, sentinelId);
+
       this.currentCommand = {
         command,
         output: '',
@@ -1168,16 +1277,22 @@ export class ChatTerminal {
         loadingEl,
         promptBuffer: '',
         cellContext,
-        outputPre: null
+        outputPre: null,
+        sentinelId,
+        exitCode: null,
+        isInteractive: isInteractiveCommand,
+        fromRerun
       };
 
-      const escapedCommand = this.escapeShellCommand(command);
       if (cellContext?.outputPrompt) {
         cellContext.outputPrompt.textContent = 'Out [*]:';
       }
       this.setCommandRunning(true, cellContext);
       this.commandBusyWarningShown = false;
-      this.writer(escapedCommand + '\r');
+      this.dbg('run', { cmd: adapted }, 'sentinelId=', sentinelId);
+      // Log a shortened preview of the final payload for debugging
+      this.dbg('payload preview =>', (commandWithSentinel + '\r').slice(0, 160));
+      this.writer(commandWithSentinel + '\r');
       this.updateControlButtonStates(cellContext);
     } catch (error) {
       this.removeLoadingMessage(loadingEl);
@@ -1187,7 +1302,43 @@ export class ChatTerminal {
       this.processCommandQueue();
     }
 
-    this.scrollToBottom();
+    // Only scroll to bottom for new commands, not reruns
+    if (!fromRerun) {
+      this.scrollToBottom();
+    }
+  }
+
+  // If the terminal backend is stdio (no PTY), tweak certain commands for better UX.
+  adaptCommandForEnvironment(raw) {
+    const input = String(raw || '');
+    let out = input;
+    try {
+      const tab = typeof this.getTabState === 'function' ? this.getTabState() : null;
+      const mode = tab?.mode || 'pty';
+
+      // Check if it's an ssh invocation
+      const m = input.match(/^\s*ssh(\s+)([\s\S]*)$/);
+      if (m) {
+        const rest = m[2] || '';
+        const hasT = /(^|\s)-t{1,2}(\s|$)/.test(rest);
+
+        // For stdio mode (no PTY), force remote TTY allocation
+        if (mode !== 'pty') {
+          const injected = hasT ? rest : `-tt ${rest}`;
+          out = `TERM=xterm-256color ssh ${injected}`;
+          this.dbg('adapt ssh for stdio ->', out);
+        } else {
+          // For PTY mode, also add -tt if not present to ensure proper TTY allocation
+          if (!hasT) {
+            out = `ssh -tt ${rest}`;
+            this.dbg('adapt ssh for pty (add -tt) ->', out);
+          }
+        }
+      }
+    } catch (e) {
+      // best-effort adaptation, ignore errors
+    }
+    return out;
   }
 
   toggleOutputCollapse(cellContext) {
@@ -1287,7 +1438,13 @@ export class ChatTerminal {
     } else {
       cellContext.outputContent?.appendChild(pre);
     }
-    this.scrollToBottom();
+
+    // Don't auto-scroll for rerun commands
+    const fromRerun = this.currentCommand?.fromRerun || false;
+    if (!fromRerun) {
+      this.scrollToBottom();
+    }
+
     this.updateControlButtonStates(cellContext);
     this.markDirty();
 
@@ -1330,6 +1487,7 @@ export class ChatTerminal {
       return;
     }
 
+    this.dbg('data chunk', { bytes: (typeof data === 'string' ? data.length : 0) });
     this.currentCommand.output += data;
     const cellContext = this.currentCommand.cellContext;
     if (cellContext?.outputPrompt) {
@@ -1340,17 +1498,31 @@ export class ChatTerminal {
       this.currentCommand.promptBuffer = '';
     }
     this.currentCommand.promptBuffer += data;
+
+    // Check if this is an interactive command
+    const isInteractiveCommand = this.currentCommand.isInteractive || false;
+
+    const sentinelTriggered = this.stripCommandSentinel();
+    if (sentinelTriggered) {
+      this.dbg('sentinel detected', {
+        id: this.currentCommand?.sentinelId,
+        exit: this.currentCommand?.exitCode
+      });
+    }
     if (this.currentCommand.promptBuffer.length > 4000) {
       this.currentCommand.promptBuffer = this.currentCommand.promptBuffer.slice(-4000);
     }
 
     const cleanOutput = this.cleanTerminalOutput(this.currentCommand.output, this.currentCommand.command);
 
+    // Check if this is a rerun command
+    const fromRerun = this.currentCommand.fromRerun || false;
+
     if (!this.currentCommand.outputPre) {
       this.removeLoadingMessage(this.currentCommand.loadingEl);
       const preEl = this.renderCellOutput(cellContext, cleanOutput);
       this.currentCommand.outputPre = preEl;
-      if (!cellContext?.collapsed) {
+      if (!cellContext?.collapsed && !fromRerun) {
         this.scrollToBottom();
       }
     } else if (this.currentCommand.outputPre) {
@@ -1362,29 +1534,57 @@ export class ChatTerminal {
       preEl.textContent = cleanOutput;
       if (cellContext?.collapsed) {
         preEl.scrollTop = prevScrollTop;
-      } else {
+      } else if (!fromRerun) {
         this.scrollToBottom();
       }
       this.updateControlButtonStates(cellContext);
     }
 
-    // Detect when the shell prompt returns to mark the command as complete
-    if (this.detectShellPrompt(this.currentCommand.promptBuffer)) {
+    if (sentinelTriggered) {
+      this.finalizeCommandOutput();
+      return;
+    }
+
+    // For interactive commands, finalize after seeing substantial output
+    // This allows the user to interact with the remote shell
+    // Use a longer threshold to ensure we capture the initial connection output
+    if (isInteractiveCommand && this.currentCommand.output.length > 200) {
+      this.dbg('interactive command output detected, finalizing');
+      this.finalizeCommandOutput();
+      return;
+    }
+
+    // For non-interactive commands, detect when the shell prompt returns
+    if (!isInteractiveCommand && this.detectShellPrompt(this.currentCommand.promptBuffer)) {
+      this.dbg('prompt detected');
       this.finalizeCommandOutput();
     }
+  }
+
+  handlePromptReady() {
+    if (!this.isCommandRunning || !this.currentCommand) {
+      return;
+    }
+    this.finalizeCommandOutput();
   }
 
   finalizeCommandOutput() {
     if (!this.currentCommand) return;
 
-    const { output, command, cellContext } = this.currentCommand;
+    this.stripCommandSentinel();
+
+    const { output, command, cellContext, exitCode } = this.currentCommand;
+    this.dbg('finalize', { exitCode, outputBytes: output?.length || 0 });
 
     const cleanOutput = this.cleanTerminalOutput(output, command);
     if (cellContext?.outputPrompt) {
       cellContext.outputPrompt.textContent = `Out [${cellContext.outputPrompt.dataset.index}]:`;
     }
-    const isError = cleanOutput.toLowerCase().includes('error') ||
-                    cleanOutput.toLowerCase().includes('command not found');
+    const exitCodeKnown = Number.isInteger(exitCode);
+    const cleanLower = cleanOutput.toLowerCase();
+    const heuristicError = cleanLower.includes('error') ||
+                    cleanLower.includes('command not found');
+    const isError = exitCodeKnown ? exitCode !== 0 : heuristicError;
 
     if (cellContext?.outputPrompt) {
       const idx = cellContext.outputPrompt.dataset.index;
@@ -1419,6 +1619,17 @@ export class ChatTerminal {
       this.currentCommand.outputPre = this.renderCellOutput(cellContext, cleanOutput, { isError });
     }
 
+    if (cellContext) {
+      cellContext.exitCode = exitCodeKnown ? exitCode : null;
+      if (cellContext.cellEl) {
+        if (exitCodeKnown) {
+          cellContext.cellEl.dataset.exitCode = String(exitCode);
+        } else {
+          delete cellContext.cellEl.dataset.exitCode;
+        }
+      }
+    }
+
     this.setCommandRunning(false, cellContext);
     this.currentCommand = null;
     this.commandBusyWarningShown = false;
@@ -1439,7 +1650,14 @@ export class ChatTerminal {
     if (!sanitized) return false;
 
     const lines = sanitized.split('\n');
-    const lastLineRaw = lines[lines.length - 1] || '';
+    let lastLineRaw = '';
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const candidate = lines[i];
+      if (candidate && candidate.trim().length > 0) {
+        lastLineRaw = candidate;
+        break;
+      }
+    }
     if (!lastLineRaw) return false;
 
     // Remove trailing whitespace but keep internal spacing for prompt matching
@@ -1450,10 +1668,26 @@ export class ChatTerminal {
     const promptPatterns = [
       /^(?:\[.*\]\s*)?(?:[A-Za-z0-9_.\-]+@)?[A-Za-z0-9_.\-:\/~\[\]{}()\\ ]*[#$%❯»>]$/,
       /^(?:PS )?[A-Za-z]:\\.*>$/,
-      /^[A-Za-z0-9_.\-:\/~\[\]{}()\\ ]*λ$/
+      /^[A-Za-z0-9_.\-:\/~\[\]{}()\\ ]*λ$/,
+      /^(?:╰─|└─|┴─|┘─).*[❯➜➤➟▶▸▹]$/
     ];
 
-    return promptPatterns.some((pattern) => pattern.test(lastLine));
+    if (promptPatterns.some((pattern) => pattern.test(lastLine))) {
+      return true;
+    }
+
+    // Fallback detection for prompts ending with common indicator symbols
+    const promptIndicators = /[#$%❯»➜➤➟▶▸▹⟫⟩λƒ>‹›❮❯]$/;
+    if (promptIndicators.test(lastLine)) {
+      return true;
+    }
+
+    // Handle prompts that end with indicator followed by a space (e.g., "➜ ")
+    if (/[#$%❯»➜➤➟▶▸▹⟫⟩>]\s*$/.test(lastLine)) {
+      return true;
+    }
+
+    return false;
   }
 
   setCommandRunning(isRunning, cellContext = null) {
@@ -1499,10 +1733,19 @@ export class ChatTerminal {
       }
     }
 
+    // Check if this command was a rerun from history
+    const fromRerun = this.currentCommand?.fromRerun || false;
+
     if (!isRunning) {
-      this.input?.focus();
+      // For rerun commands, keep focus on the cell instead of moving to input
+      if (!fromRerun) {
+        this.input?.focus();
+      }
     }
-    if (!ctx?.collapsed) {
+
+    // For rerun commands, don't scroll at all - stay in current position
+    // For new commands, scroll to bottom
+    if (!ctx?.collapsed && !fromRerun) {
       this.scrollToBottom();
     }
   }
@@ -1572,6 +1815,10 @@ export class ChatTerminal {
 
     // Remove BEL characters
     clean = clean.replace(/\x07/g, '');
+
+    // Remove internal execution sentinels if any remain
+    const sentinelPattern = new RegExp(`${this.escapeRegExp(COMMAND_DONE_SENTINEL_PREFIX)}[A-Za-z0-9]+__\\d+__`, 'g');
+    clean = clean.replace(sentinelPattern, '');
 
     // Remove shell prompts at the end (more careful pattern)
     // This matches common prompt patterns like $, #, >, %, ❯, », followed by optional spaces at the end
@@ -1668,8 +1915,28 @@ export class ChatTerminal {
   scrollToBottom() {
     if (!this.container) return;
 
+    // Check if we're in a rerun operation - if so, don't scroll
+    // Check both currentCommand and selectedCell's context
+    const fromRerunCommand = this.currentCommand?.fromRerun || false;
+    const fromRerunCell = this.selectedCell?.__smrtContext?.fromRerun || false;
+    const fromRerun = fromRerunCommand || fromRerunCell;
+
+    this.dbg('scrollToBottom called', {
+      fromRerun,
+      fromRerunCommand,
+      fromRerunCell,
+      hasCurrentCommand: !!this.currentCommand,
+      hasSelectedCell: !!this.selectedCell
+    });
+
+    if (fromRerun) {
+      this.dbg('scrollToBottom blocked for rerun');
+      return;
+    }
+
     const performScroll = () => {
       try {
+        this.dbg('scrollToBottom executing scroll');
         this.container.scrollTop = this.container.scrollHeight;
         const lastMessage = this.messages?.lastElementChild;
         if (lastMessage && typeof lastMessage.scrollIntoView === 'function') {
@@ -1850,6 +2117,95 @@ export class ChatTerminal {
     // Return the command as-is without any automatic quoting or escaping
     // This allows users to control their own quoting
     return command;
+  }
+
+  createCommandSentinelId() {
+    this.commandSentinelCounter = (this.commandSentinelCounter + 1) % Number.MAX_SAFE_INTEGER;
+    const timePart = Date.now().toString(36);
+    const counterPart = this.commandSentinelCounter.toString(36).padStart(4, '0');
+    const randomPart = Math.random().toString(36).slice(2, 6);
+    return `${timePart}${counterPart}${randomPart}`;
+  }
+
+  appendCommandSentinel(command, sentinelId) {
+    // We emit TWO sentinels:
+    // 1) OSC 133;D sequence (understood by most terminals and not visible)
+    // 2) A plain-text fallback like: "__SMRT_DONE__<id>__<code>__"
+    //    so completion still works if OSC is stripped by the shell/theme.
+    const base = typeof command === 'string' ? command : '';
+
+    // Check if this is an interactive command (ssh, telnet, etc.) that won't return to local shell
+    const isInteractiveCommand = /^\s*(ssh|telnet|nc|netcat|mysql|psql|mongo|redis-cli|python|node|irb|rails\s+console)\s+/i.test(base);
+
+    // For interactive commands, don't append sentinel as they won't execute it
+    if (isInteractiveCommand) {
+      this.dbg('interactive command detected, skipping sentinel');
+      return base;
+    }
+
+    const oscSentinel = `printf "\\033]133;D;smrt:${sentinelId};exit:%d\\007" $?`;
+    const textSentinel = `printf "${COMMAND_DONE_SENTINEL_PREFIX}${sentinelId}__%d__" $?`;
+    const sentinelCommand = `${oscSentinel}; ${textSentinel}`;
+
+    if (!base) {
+      return sentinelCommand;
+    }
+
+    const trimmed = base.trimEnd();
+    const trailingWhitespace = base.slice(trimmed.length);
+    if (!trimmed) {
+      return sentinelCommand;
+    }
+
+    const endsWithSemicolon = trimmed.endsWith(';');
+    const endsWithSingleAmp = trimmed.endsWith('&') && !trimmed.endsWith('&&');
+    if (endsWithSemicolon || endsWithSingleAmp) {
+      return `${trimmed}${trailingWhitespace} ${sentinelCommand}`;
+    }
+
+    return `${base}; ${sentinelCommand}`;
+  }
+
+  stripCommandSentinel() {
+    if (!this.currentCommand || !this.currentCommand.sentinelId) {
+      return false;
+    }
+
+    const sentinelId = this.currentCommand.sentinelId;
+    let found = false;
+    let exitCode = null;
+
+    const applyPattern = (patternSource, label = 'pattern') => {
+      const regex = new RegExp(patternSource, 'g');
+      let localFound = false;
+      this.currentCommand.output = this.currentCommand.output.replace(regex, (match, code) => {
+        localFound = true;
+        found = true;
+        const parsed = Number.parseInt(code, 10);
+        if (Number.isFinite(parsed)) {
+          exitCode = parsed;
+        }
+        return '';
+      });
+      if (localFound && typeof this.currentCommand.promptBuffer === 'string') {
+        const promptRegex = new RegExp(patternSource, 'g');
+        this.currentCommand.promptBuffer = this.currentCommand.promptBuffer.replace(promptRegex, '');
+      }
+      if (localFound) this.dbg('sentinel match via', label, 'exit=', exitCode);
+    };
+
+    const escapedId = this.escapeRegExp(sentinelId);
+    applyPattern(`\\x1b\\]133;D;smrt:${escapedId};exit:([0-9]+)\\x07`, 'osc133D');
+    applyPattern(`${this.escapeRegExp(COMMAND_DONE_SENTINEL_PREFIX)}${escapedId}__([0-9]+)__\\s*`, 'plain');
+
+    if (found) {
+      if (exitCode !== null) {
+        this.currentCommand.exitCode = exitCode;
+      }
+      this.currentCommand.sentinelCaptured = true;
+    }
+
+    return found;
   }
 
   // ============ Smart Command Suggestions (Feature 6 & 8) ============
