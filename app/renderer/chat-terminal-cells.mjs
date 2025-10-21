@@ -1,5 +1,7 @@
 /* Cell management for ChatTerminal */
 
+import { i18n } from './i18n.mjs';
+
 export class CellManager {
   constructor(chatTerminal) {
     this.chatTerminal = chatTerminal;
@@ -124,16 +126,16 @@ export class CellManager {
     stopBtn.className = 'cell-control-btn control-stop';
     stopBtn.dataset.action = 'stop';
     stopBtn.disabled = true;
-    stopBtn.textContent = 'Stop';
-    stopBtn.title = 'Stop current command (Ctrl+C)';
+    stopBtn.textContent = i18n.t('cell.control.stop', 'Stop');
+    stopBtn.title = i18n.t('cell.control.stop.title', 'Stop current command (Ctrl+C)');
 
     const copyBtn = document.createElement('button');
     copyBtn.type = 'button';
     copyBtn.className = 'cell-control-btn control-copy';
     copyBtn.dataset.action = 'copy';
     copyBtn.disabled = true;
-    copyBtn.textContent = 'Copy';
-    copyBtn.title = 'Copy output content';
+    copyBtn.textContent = i18n.t('cell.control.copy', 'Copy');
+    copyBtn.title = i18n.t('cell.control.copy.title', 'Copy output content');
 
     controlContent.append(stopBtn, copyBtn);
     controlRow.append(controlPrompt, controlContent);

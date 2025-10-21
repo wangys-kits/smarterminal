@@ -3,7 +3,7 @@
 const translations = {
   'zh-CN': {
     // App Title
-    'app.title': 'Smarterminal',
+    'app.title': 'SmartTerminal',
     'app.subtitle': '智能终端工作台',
 
     // Home Page
@@ -97,6 +97,12 @@ const translations = {
     'message.tabClosed': '标签页已关闭',
     'message.saved': '已保存',
 
+    // Cell Controls
+    'cell.control.stop': '停止',
+    'cell.control.stop.title': '停止当前命令 (Ctrl+C)',
+    'cell.control.copy': '复制',
+    'cell.control.copy.title': '复制输出内容',
+
     // Aria Labels
     'aria.scrollLeft': '向左滚动标签页',
     'aria.scrollRight': '向右滚动标签页',
@@ -107,7 +113,7 @@ const translations = {
 
   'en': {
     // App Title
-    'app.title': 'Smarterminal',
+    'app.title': 'SmartTerminal',
     'app.subtitle': 'Intelligent Terminal Workspace',
 
     // Home Page
@@ -200,6 +206,12 @@ const translations = {
     'message.terminalInit': 'Terminal is initializing, please wait...',
     'message.tabClosed': 'Tab closed',
     'message.saved': 'Saved',
+
+    // Cell Controls
+    'cell.control.stop': 'Stop',
+    'cell.control.stop.title': 'Stop current command (Ctrl+C)',
+    'cell.control.copy': 'Copy',
+    'cell.control.copy.title': 'Copy output content',
 
     // Aria Labels
     'aria.scrollLeft': 'Scroll tabs left',

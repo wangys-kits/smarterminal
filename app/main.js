@@ -9,6 +9,10 @@ try { pty = require('node-pty'); } catch (e) {
   console.warn('[main] node-pty not available, falling back to stdio shell (limited):', e?.message || e);
 }
 const { spawn } = require('child_process');
+const kill = require('tree-kill');
+const ProcessMonitor = require('./process-monitor');
+const OutputStreamer = require('./output-streamer');
+const CommandExecutor = require('./command-executor');
 
 const TAB_DIR_NAME = 'tabs';
 const TAB_EXTENSION = '.smt';
@@ -89,6 +93,12 @@ const isMac = process.platform === 'darwin';
 const PTYS = new Map();
 /** @type {Map<string, any>} */
 const SSH_CONNS = new Map();
+/** @type {Map<string, ProcessMonitor>} */
+const MONITORS = new Map();
+/** @type {Map<string, OutputStreamer>} */
+const STREAMERS = new Map();
+/** @type {CommandExecutor} */
+let commandExecutor = null;
 
 
 function createWindow() {
@@ -98,6 +108,8 @@ function createWindow() {
     minWidth: 960,
     minHeight: 600,
     backgroundColor: '#F7F8FA',
+    // Use app icon for Windows/Linux window (macOS ignores this option)
+    icon: path.join(__dirname, 'assets', 'app-icon.png'),
     show: false,
     webPreferences: {
       contextIsolation: true,
@@ -130,8 +142,18 @@ app.on('activate', () => {
 });
 
 app.whenReady().then(() => {
+  // 初始化命令执行器
+  commandExecutor = new CommandExecutor();
+
   registerTabHandlers();
   createWindow();
+});
+
+// 应用退出时清理所有进程
+app.on('before-quit', async () => {
+  if (commandExecutor) {
+    await commandExecutor.cleanup();
+  }
 });
 
 // IPC contracts (whitelist)
@@ -165,46 +187,183 @@ ipcMain.handle('term.spawn', (event, args) => {
         env
       });
       PTYS.set(ptyId, proc);
-      proc.onData(data => { try { event.sender.send('evt.term.data', { ptyId, data }); } catch (_) {} });
-      proc.onExit(e => { try { event.sender.send('evt.term.exit', { ptyId, code: e.exitCode, signal: e.signal }); } catch (_) {} PTYS.delete(ptyId); });
-    } else {
-      // Fallback strategy without node-pty:
-      // 1) Try to wrap the shell with 'script' to simulate a TTY; this gives
-      //    us interactive behavior without node-pty.
-      // 2) If 'script' is unavailable, fall back to bash/sh reading from stdin.
-      let spawned = false;
-      if (process.platform !== 'win32') {
-        const scriptExe = findExecutable('/usr/bin/script') || findExecutable('/bin/script') || findExecutable('script');
-        const bashExe = findExecutable('/bin/bash') || findExecutable('/usr/bin/bash') || shellExe;
-        if (scriptExe && bashExe) {
-          try {
-            // -q: quiet, /dev/null: skip transcript file
-            proc = spawn(scriptExe, ['-q', '/dev/null', bashExe, '-i'], { cwd: cwd || os.homedir(), env });
-            spawned = true;
-          } catch (_) { spawned = false; }
-        }
-      }
 
-      if (!spawned) {
-        // Fallback stdio shell (limited; no TTY features). Prefer a shell that reads stdin.
-        let sh = shellExe;
-        let spawnArgs = [];
-        if (process.platform === 'win32') {
-          spawnArgs = ['-NoLogo'];
+      // 创建输出流和监控器
+      const streamer = new OutputStreamer(ptyId);
+      streamer.open();
+      STREAMERS.set(ptyId, streamer);
+
+      const monitor = new ProcessMonitor(ptyId, proc.pid);
+      MONITORS.set(ptyId, monitor);
+      monitor.start();
+
+      // 监听监控事件并转发给渲染进程
+      monitor.on('update', (metrics) => {
+        try {
+          event.sender.send('evt.term.metrics', { ptyId, metrics });
+        } catch (_) {}
+      });
+
+      monitor.on('high-cpu', (metrics) => {
+        try {
+          event.sender.send('evt.term.warning', {
+            ptyId,
+            type: 'high-cpu',
+            message: 'High CPU usage detected',
+            metrics
+          });
+        } catch (_) {}
+      });
+
+      monitor.on('high-memory', (metrics) => {
+        try {
+          event.sender.send('evt.term.warning', {
+            ptyId,
+            type: 'high-memory',
+            message: 'High memory usage detected',
+            metrics
+          });
+        } catch (_) {}
+      });
+
+      // Unresponsive monitoring removed
+
+      proc.onData(data => {
+        try {
+          // 记录输出到监控器
+          monitor.recordOutput(data.length);
+
+          // 流式写入文件
+          streamer.write(data);
+
+          // 发送给渲染进程
+          event.sender.send('evt.term.data', { ptyId, data });
+        } catch (_) {}
+      });
+
+      proc.onExit(e => {
+        try {
+          // 停止监控和流
+          const mon = MONITORS.get(ptyId);
+          if (mon) {
+            mon.stop();
+            MONITORS.delete(ptyId);
+          }
+
+          const str = STREAMERS.get(ptyId);
+          if (str) {
+            str.close();
+            STREAMERS.delete(ptyId);
+          }
+
+          event.sender.send('evt.term.exit', { ptyId, code: e.exitCode, signal: e.signal });
+        } catch (_) {}
+        PTYS.delete(ptyId);
+      });
+    } else {
+      // Fallback strategy without node-pty: launch an interactive shell directly using pipes.
+      // The previous `script` wrapper fails in Electron sandboxes ("tcgetattr/ioctl" errors),
+      // so we instead force interactive mode and rely on sentinel injection for completion.
+      let sh = shellExe;
+      let spawnArgs = [];
+      if (process.platform === 'win32') {
+        spawnArgs = ['-NoLogo'];
+      } else {
+        const bash = findExecutable('/bin/bash') || findExecutable('/usr/bin/bash');
+        const shBin = findExecutable('/bin/sh') || findExecutable('/usr/bin/sh');
+        if (bash) {
+          sh = bash;
+          spawnArgs = ['-i'];
+        } else if (shBin) {
+          sh = shBin;
+          spawnArgs = ['-i'];
         } else {
-          const bash = findExecutable('/bin/bash') || findExecutable('/usr/bin/bash');
-          const shBin = findExecutable('/bin/sh') || findExecutable('/usr/bin/sh');
-          if (bash) { sh = bash; spawnArgs = ['-s']; }
-          else if (shBin) { sh = shBin; spawnArgs = ['-s']; }
-          else { sh = shellExe; spawnArgs = ['-s']; }
-          env.PS1 = '';
+          sh = shellExe;
+          spawnArgs = ['-i'];
         }
-        proc = spawn(sh, spawnArgs, { cwd: cwd || os.homedir(), env });
+        env.PS1 = env.PS1 || '';
+        env.TERM = env.TERM || 'xterm-256color';
       }
+      proc = spawn(sh, spawnArgs, { cwd: cwd || os.homedir(), env });
       PTYS.set(ptyId, proc);
-      proc.stdout.on('data', buf => { try { event.sender.send('evt.term.data', { ptyId, data: buf.toString('utf8') }); } catch (_) {} });
-      proc.stderr.on('data', buf => { try { event.sender.send('evt.term.data', { ptyId, data: buf.toString('utf8') }); } catch (_) {} });
-      proc.on('close', code => { try { event.sender.send('evt.term.exit', { ptyId, code }); } catch (_) {} PTYS.delete(ptyId); });
+
+      // 创建输出流和监控器（stdio 模式）
+      const streamer = new OutputStreamer(ptyId);
+      streamer.open();
+      STREAMERS.set(ptyId, streamer);
+
+      const monitor = new ProcessMonitor(ptyId, proc.pid);
+      MONITORS.set(ptyId, monitor);
+      monitor.start();
+
+      // 监听监控事件并转发给渲染进程
+      monitor.on('update', (metrics) => {
+        try {
+          event.sender.send('evt.term.metrics', { ptyId, metrics });
+        } catch (_) {}
+      });
+
+      monitor.on('high-cpu', (metrics) => {
+        try {
+          event.sender.send('evt.term.warning', {
+            ptyId,
+            type: 'high-cpu',
+            message: 'High CPU usage detected',
+            metrics
+          });
+        } catch (_) {}
+      });
+
+      monitor.on('high-memory', (metrics) => {
+        try {
+          event.sender.send('evt.term.warning', {
+            ptyId,
+            type: 'high-memory',
+            message: 'High memory usage detected',
+            metrics
+          });
+        } catch (_) {}
+      });
+
+      // Unresponsive monitoring removed
+
+      proc.stdout.on('data', buf => {
+        try {
+          const data = buf.toString('utf8');
+          monitor.recordOutput(data.length);
+          streamer.write(data);
+          event.sender.send('evt.term.data', { ptyId, data });
+        } catch (_) {}
+      });
+
+      proc.stderr.on('data', buf => {
+        try {
+          const data = buf.toString('utf8');
+          monitor.recordOutput(data.length);
+          streamer.write(data);
+          event.sender.send('evt.term.data', { ptyId, data });
+        } catch (_) {}
+      });
+
+      proc.on('close', code => {
+        try {
+          // 停止监控和流
+          const mon = MONITORS.get(ptyId);
+          if (mon) {
+            mon.stop();
+            MONITORS.delete(ptyId);
+          }
+
+          const str = STREAMERS.get(ptyId);
+          if (str) {
+            str.close();
+            STREAMERS.delete(ptyId);
+          }
+
+          event.sender.send('evt.term.exit', { ptyId, code });
+        } catch (_) {}
+        PTYS.delete(ptyId);
+      });
     }
   } catch (err) {
     console.error('[term.spawn] Failed to launch shell:', err);
@@ -242,6 +401,235 @@ ipcMain.handle('term.kill', (_e, { ptyId }) => {
     PTYS.delete(ptyId);
   }
   return { ok: true };
+});
+
+// Force kill a process by ptyId (legacy - for PTY/stdio shells)
+ipcMain.handle('term.forceKill', (_e, { ptyId }) => {
+  const p = PTYS.get(ptyId);
+  if (p) {
+    try {
+      // For PTY mode, use the built-in kill method
+      if (p.kill && typeof p.kill === 'function') {
+        console.log('[term.forceKill] Using PTY kill for:', ptyId);
+        p.kill('SIGKILL');
+      } else if (p.pid) {
+        // For stdio mode, use tree-kill to kill the entire process tree
+        console.log('[term.forceKill] Using tree-kill for pid:', p.pid, 'ptyId:', ptyId);
+
+        // Immediately kill the entire process tree with SIGKILL
+        kill(p.pid, 'SIGKILL', (err) => {
+          if (err) {
+            console.warn('[term.forceKill] tree-kill failed:', err);
+            // Fallback: direct kill
+            try {
+              process.kill(p.pid, 'SIGKILL');
+            } catch (killErr) {
+              console.warn('[term.forceKill] Direct kill also failed:', killErr);
+            }
+          } else {
+            console.log('[term.forceKill] Successfully killed process tree for pid:', p.pid);
+          }
+        });
+
+        // Also try to close stdin immediately
+        try {
+          if (p.stdin && typeof p.stdin.end === 'function') {
+            p.stdin.end();
+          }
+        } catch (err) {
+          console.warn('[term.forceKill] Failed to close stdin:', err);
+        }
+      } else {
+        // Fallback: close stdin
+        console.log('[term.forceKill] No pid available, closing stdin for:', ptyId);
+        try {
+          if (p.stdin && typeof p.stdin.end === 'function') {
+            p.stdin.end();
+          }
+        } catch (err) {
+          console.warn('[term.forceKill] Failed to close stdin:', err);
+        }
+      }
+    } catch (err) {
+      console.warn('[term.forceKill] Failed to kill process:', err);
+    }
+
+    // Clean up monitors and streamers
+    const mon = MONITORS.get(ptyId);
+    if (mon) {
+      mon.stop();
+      MONITORS.delete(ptyId);
+    }
+
+    const str = STREAMERS.get(ptyId);
+    if (str) {
+      str.close();
+      STREAMERS.delete(ptyId);
+    }
+
+    // Remove the process from the map after attempting to kill it
+    PTYS.delete(ptyId);
+  }
+  return { ok: true };
+});
+
+// Execute command (new multi-instance mode)
+ipcMain.handle('cmd.execute', (event, { commandId, command, cwd }) => {
+  if (!commandExecutor) {
+    return { ok: false, error: 'CommandExecutor not initialized' };
+  }
+
+  try {
+    const result = commandExecutor.executeCommand(commandId, command, { cwd });
+
+    // 创建输出流和监控器
+    const streamer = new OutputStreamer(commandId);
+    streamer.open();
+    STREAMERS.set(commandId, streamer);
+
+    const monitor = new ProcessMonitor(commandId, result.pid);
+    MONITORS.set(commandId, monitor);
+    monitor.start();
+
+    // 监听监控事件并转发给渲染进程
+    monitor.on('update', (metrics) => {
+      try {
+        event.sender.send('evt.cmd.metrics', { commandId, metrics });
+      } catch (_) {}
+    });
+
+    monitor.on('high-cpu', (metrics) => {
+      try {
+        event.sender.send('evt.cmd.warning', {
+          commandId,
+          type: 'high-cpu',
+          message: 'High CPU usage detected',
+          metrics
+        });
+      } catch (_) {}
+    });
+
+    monitor.on('high-memory', (metrics) => {
+      try {
+        event.sender.send('evt.cmd.warning', {
+          commandId,
+          type: 'high-memory',
+          message: 'High memory usage detected',
+          metrics
+        });
+      } catch (_) {}
+    });
+
+    monitor.on('unresponsive', (metrics) => {
+      try {
+        event.sender.send('evt.cmd.warning', {
+          commandId,
+          type: 'unresponsive',
+          message: 'Command appears unresponsive',
+          metrics
+        });
+      } catch (_) {}
+    });
+
+    // 监听输出
+    result.stdout.on('data', (data) => {
+      try {
+        const dataStr = data.toString('utf8');
+        monitor.recordOutput(dataStr.length);
+        streamer.write(dataStr);
+        event.sender.send('evt.cmd.data', { commandId, data: dataStr, stream: 'stdout' });
+      } catch (_) {}
+    });
+
+    result.stderr.on('data', (data) => {
+      try {
+        const dataStr = data.toString('utf8');
+        monitor.recordOutput(dataStr.length);
+        streamer.write(dataStr);
+        event.sender.send('evt.cmd.data', { commandId, data: dataStr, stream: 'stderr' });
+      } catch (_) {}
+    });
+
+    // 使用 onExit 方法注册退出处理器
+    result.onExit((code, signal) => {
+      try {
+        console.log('[cmd.execute] Process exited:', { commandId, code, signal });
+
+        // 停止监控和流
+        const mon = MONITORS.get(commandId);
+        if (mon) {
+          mon.stop();
+          MONITORS.delete(commandId);
+        }
+
+        const str = STREAMERS.get(commandId);
+        if (str) {
+          str.close();
+          STREAMERS.delete(commandId);
+        }
+
+        // 通知渲染进程命令已完成
+        event.sender.send('evt.cmd.exit', { commandId, code: code || 0 });
+      } catch (err) {
+        console.error('[cmd.execute] Exit handler error:', err);
+      }
+    });
+
+    return { ok: true, data: { commandId, pid: result.pid } };
+  } catch (err) {
+    console.error('[cmd.execute] Failed:', err);
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+
+// Kill command (new multi-instance mode)
+ipcMain.handle('cmd.kill', async (_e, { commandId }) => {
+  if (!commandExecutor) {
+    return { ok: false, error: 'CommandExecutor not initialized' };
+  }
+
+  try {
+    console.log('[cmd.kill] Killing command:', commandId);
+    await commandExecutor.killCommand(commandId);
+
+    // 清理监控器和输出流
+    const mon = MONITORS.get(commandId);
+    if (mon) {
+      mon.stop();
+      MONITORS.delete(commandId);
+    }
+
+    const str = STREAMERS.get(commandId);
+    if (str) {
+      str.close();
+      STREAMERS.delete(commandId);
+    }
+
+    return { ok: true };
+  } catch (err) {
+    console.error('[cmd.kill] Failed:', err);
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+
+// Write to command stdin
+ipcMain.handle('cmd.write', (_e, { commandId, data }) => {
+  if (!commandExecutor) {
+    return { ok: false, error: 'CommandExecutor not initialized' };
+  }
+
+  const processInfo = commandExecutor.processes.get(commandId);
+  if (!processInfo) {
+    return { ok: false, error: 'Command not found' };
+  }
+
+  try {
+    processInfo.proc.stdin.write(data);
+    return { ok: true };
+  } catch (err) {
+    console.error('[cmd.write] Failed:', err);
+    return { ok: false, error: String(err?.message || err) };
+  }
 });
 
 // File system listing (local)

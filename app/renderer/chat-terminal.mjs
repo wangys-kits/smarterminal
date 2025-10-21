@@ -33,6 +33,7 @@ export class ChatTerminal {
     this.changeDebounce = null;
     this.isActive = false;
     this.getTabState = null;  // Function to get current tab state
+    this.terminalReady = false;  // PTY is ready to accept commands
 
     // Initialize modules
     this.markdownRenderer = new MarkdownRenderer();
@@ -364,16 +365,23 @@ export class ChatTerminal {
     this.hideSuggestions();
   }
 
-  sendInterruptSignal() {
-    // Send Ctrl+C (SIGINT) to the terminal
-    this.dbg('sendInterruptSignal called', { hasWriter: !!this.writer });
-    if (this.writer) {
-      // Send the interrupt character (Ctrl+C = \x03)
-      this.dbg('Sending Ctrl+C (\\x03) to terminal');
-      this.writer('\x03');
+  async sendInterruptSignal() {
+    // 使用 PTY 模式发送中断信号（Ctrl+C）
+    this.dbg('sendInterruptSignal called', { hasCurrentCommand: !!this.currentCommand });
+
+    if (this.currentCommand && this.currentCommand.ptyId) {
+      const ptyId = this.currentCommand.ptyId;
+      this.dbg('Sending Ctrl+C to PTY:', ptyId);
+
+      try {
+        // 发送 Ctrl+C (ASCII 3) 到 PTY
+        const result = await sm.term.write({ ptyId, data: '\x03' });
+        this.dbg('Ctrl+C sent:', result);
+      } catch (err) {
+        this.dbg('Failed to send Ctrl+C:', err);
+      }
     } else {
-      this.dbg('No writer available');
-      this.addErrorMessage('No active terminal connection');
+      this.dbg('No PTY to send interrupt to');
     }
   }
 
@@ -400,24 +408,7 @@ export class ChatTerminal {
       return;
     }
 
-    // Check if terminal is ready before executing command
-    if (this.getTabState) {
-      const tab = this.getTabState();
-      if (tab && !tab.terminalReady) {
-        console.warn('[terminal] Terminal not ready yet, please wait');
-        // Show a temporary warning in the status area if available
-        if (this.statusEl) {
-          const originalText = this.statusEl.textContent;
-          this.statusEl.textContent = 'Terminal is initializing, please wait...';
-          this.statusEl.style.color = 'var(--color-warning, orange)';
-          setTimeout(() => {
-            this.statusEl.textContent = originalText;
-            this.statusEl.style.color = '';
-          }, 2000);
-        }
-        return;
-      }
-    }
+    // Terminal ready check removed - each tab's terminal is always ready after initialization
 
     const command = trimmedInput;
 
@@ -794,8 +785,61 @@ export class ChatTerminal {
     });
 
     if (this.isCommandRunning && this.currentCommand?.cellContext === cellContext) {
-      this.dbg('Sending interrupt signal');
-      this.sendInterruptSignal();
+      this.dbg('Stopping command');
+
+      // Clear any existing termination timer
+      if (this.currentCommand.terminationTimer) {
+        clearTimeout(this.currentCommand.terminationTimer);
+        this.currentCommand.terminationTimer = null;
+      }
+
+      // Get tab state to check mode
+      const tabState = typeof this.getTabState === 'function' ? this.getTabState() : null;
+      const mode = tabState?.mode || 'pty';
+
+      if (mode === 'pty') {
+        // PTY mode: Send Ctrl+C and wait for response
+        this.dbg('PTY mode: Sending Ctrl+C');
+        this.sendInterruptSignal();
+
+        // Wait 1 second for the command to respond to Ctrl+C
+        this.currentCommand.terminationTimer = setTimeout(() => {
+          if (this.currentCommand && this.isCommandRunning) {
+            this.dbg('Command did not respond to Ctrl+C, force finalizing');
+            this.finalizeCommandOutput();
+            this.setCommandRunning(false, cellContext);
+            this.currentCommand = null;
+            this.processCommandQueue();
+          }
+        }, 1000);
+      } else {
+        // stdio mode: Ctrl+C doesn't work reliably, force kill immediately
+        this.dbg('stdio mode: Force killing PTY');
+
+        // Mark command as stopped to prevent further output processing
+        if (this.currentCommand) {
+          this.currentCommand.stopped = true;
+        }
+
+        // Send Ctrl+C anyway (might help in some cases)
+        this.sendInterruptSignal();
+
+        // Immediately force kill the PTY to stop all child processes
+        if (this.currentCommand.ptyId) {
+          try {
+            sm.term.forceKill({ ptyId: this.currentCommand.ptyId });
+          } catch (err) {
+            this.dbg('Force kill failed:', err);
+          }
+        }
+
+        // Immediately finalize the command (don't wait)
+        this.dbg('Immediately finalizing after force kill');
+        this.finalizeCommandOutput();
+        this.setCommandRunning(false, cellContext);
+        this.currentCommand = null;
+        this.processCommandQueue();
+      }
     } else {
       this.dbg('Stop request ignored - conditions not met');
     }
@@ -1233,7 +1277,7 @@ export class ChatTerminal {
     this.startQueuedCommand(next);
   }
 
-  startQueuedCommand({ command, cellContext, fromRerun = false }) {
+  async startQueuedCommand({ command, cellContext, fromRerun = false }) {
     if (!cellContext) return;
 
     if (cellContext.collapsed) {
@@ -1247,41 +1291,46 @@ export class ChatTerminal {
     const loadingEl = this.addLoadingMessage(cellContext);
     this.updateControlButtonStates(cellContext);
 
-    if (!this.writer) {
-      this.removeLoadingMessage(loadingEl);
-      this.renderCellOutput(cellContext, 'No active terminal connection', { isError: true });
-      if (cellContext.outputPrompt) {
-        const idx = cellContext.outputPrompt.dataset.index;
-        cellContext.outputPrompt.textContent = `Out [${idx}]:`;
-      }
-      this.restoreCommandEditing(cellContext);
-      this.processCommandQueue();
-      return;
-    }
-
     try {
-      // Adapt commands for environment (e.g., ssh needs TTY when no PTY available)
-      const adapted = this.adaptCommandForEnvironment(command);
-      const escapedCommand = this.escapeShellCommand(adapted);
+      // Check if terminal is ready before executing command
+      if (!this.terminalReady) {
+        throw new Error('Terminal is not ready yet. Please wait for initialization to complete.');
+      }
+
+      // 获取当前 Tab 的状态
+      const tabState = typeof this.getTabState === 'function' ? this.getTabState() : null;
+      const ptyId = tabState?.ptyId;
+
+      if (!ptyId) {
+        throw new Error('No PTY available for this tab');
+      }
+
+      this.dbg('Executing command with PTY mode:', { ptyId, command });
+
+      // 检测是否为交互式命令
+      const isInteractiveCommand = /^\s*(ssh|telnet|nc|netcat|mysql|psql|mongo|redis-cli|python|node|irb|rails\s+console)\s+/i.test(command);
+
+      // 生成 sentinel ID（用于检测命令完成）
       const sentinelId = this.createCommandSentinelId();
 
-      // Check if this is an interactive command
-      const isInteractiveCommand = /^\s*(ssh|telnet|nc|netcat|mysql|psql|mongo|redis-cli|python|node|irb|rails\s+console)\s+/i.test(adapted);
+      // 为命令添加 sentinel（交互式命令除外）
+      const commandWithSentinel = this.appendCommandSentinel(command, sentinelId);
 
-      const commandWithSentinel = this.appendCommandSentinel(escapedCommand, sentinelId);
-
+      // 存储当前命令信息
       this.currentCommand = {
+        ptyId,
         command,
         output: '',
         startTime: Date.now(),
         loadingEl,
-        promptBuffer: '',
         cellContext,
         outputPre: null,
-        sentinelId,
         exitCode: null,
+        fromRerun,
         isInteractive: isInteractiveCommand,
-        fromRerun
+        sentinelId: isInteractiveCommand ? null : sentinelId,
+        promptBuffer: '',
+        sentinelCaptured: false
       };
 
       if (cellContext?.outputPrompt) {
@@ -1289,11 +1338,17 @@ export class ChatTerminal {
       }
       this.setCommandRunning(true, cellContext);
       this.commandBusyWarningShown = false;
-      this.dbg('run', { cmd: adapted }, 'sentinelId=', sentinelId);
-      // Log a shortened preview of the final payload for debugging
-      this.dbg('payload preview =>', (commandWithSentinel + '\r').slice(0, 160));
-      this.writer(commandWithSentinel + '\r');
+
       this.updateControlButtonStates(cellContext);
+
+      // 通过 PTY 写入命令
+      const writeResult = await sm.term.write({ ptyId, data: commandWithSentinel + '\r' });
+      if (!writeResult.ok) {
+        throw new Error(writeResult.error || 'Failed to write command to PTY');
+      }
+
+      this.dbg('Command written to PTY:', { ptyId, isInteractive: isInteractiveCommand });
+
     } catch (error) {
       this.removeLoadingMessage(loadingEl);
       this.renderCellOutput(cellContext, `Failed to execute: ${error.message}`, { isError: true });
@@ -1471,6 +1526,16 @@ export class ChatTerminal {
   updateInputAffordances() {
     if (!this.input) return;
 
+    // Disable input if terminal is not ready
+    if (!this.terminalReady) {
+      this.input.disabled = true;
+      this.input.placeholder = 'Terminal is initializing...';
+      this.input.title = 'Please wait for terminal to be ready';
+      return;
+    }
+
+    this.input.disabled = false;
+
     if (this.inputMode === 'markdown') {
       this.input.placeholder = 'Write Markdown (Shift+Enter to render • Enter for newline)';
       this.input.title = 'Markdown 模式：输入 Markdown 内容，按 Shift+Enter 渲染。使用 C 切换回命令模式。';
@@ -1483,11 +1548,35 @@ export class ChatTerminal {
   }
 
   handleTerminalOutput(data) {
+    // If there's no current command but there are queued commands, start processing
     if (!this.currentCommand) {
-      return;
+      // Check if we have a recently finalized command that might still receive output
+      if (this.lastFinalizedCommand && this.lastFinalizedCommand.outputPre) {
+        const timeSinceFinalize = Date.now() - (this.lastFinalizedCommand.finalizeTime || 0);
+        // Allow 500ms buffer to receive trailing output after finalization
+        if (timeSinceFinalize < 500) {
+          this.dbg('Appending trailing output to finalized command', { bytes: data.length });
+          this.lastFinalizedCommand.output += data;
+          const cleanOutput = this.cleanTerminalOutput(
+            this.lastFinalizedCommand.output,
+            this.lastFinalizedCommand.command
+          );
+          this.lastFinalizedCommand.outputPre.textContent = cleanOutput;
+          return;
+        }
+      }
+
+      if (this.commandQueue.length > 0 && !this.isCommandRunning) {
+        this.processCommandQueue();
+      }
+      // If still no current command, return early
+      if (!this.currentCommand) {
+        return;
+      }
     }
 
     this.dbg('data chunk', { bytes: (typeof data === 'string' ? data.length : 0) });
+    // No noDataFallbackTimer to clear - removed timeout logic
     this.currentCommand.output += data;
     const cellContext = this.currentCommand.cellContext;
     if (cellContext?.outputPrompt) {
@@ -1498,6 +1587,9 @@ export class ChatTerminal {
       this.currentCommand.promptBuffer = '';
     }
     this.currentCommand.promptBuffer += data;
+
+    // Removed 2s timeout to allow commands to run indefinitely until completion
+    // Commands will now wait for actual completion or error, not timeout prematurely
 
     // Check if this is an interactive command
     const isInteractiveCommand = this.currentCommand.isInteractive || false;
@@ -1541,22 +1633,40 @@ export class ChatTerminal {
     }
 
     if (sentinelTriggered) {
+      // No timeout timers to clear - removed timeout logic
       this.finalizeCommandOutput();
       return;
     }
 
-    // For interactive commands, finalize after seeing substantial output
+    // For interactive commands, finalize after seeing substantial output AND detecting a prompt
     // This allows the user to interact with the remote shell
-    // Use a longer threshold to ensure we capture the initial connection output
-    if (isInteractiveCommand && this.currentCommand.output.length > 200) {
-      this.dbg('interactive command output detected, finalizing');
-      this.finalizeCommandOutput();
-      return;
+    // Check for both output length and prompt detection to ensure connection is established
+    if (isInteractiveCommand) {
+      // For SSH and similar commands, wait for both:
+      // 1. Substantial output (connection messages)
+      // 2. A prompt pattern (remote shell ready)
+      const hasSubstantialOutput = this.currentCommand.output.length > 100;
+      const hasPrompt = this.detectShellPrompt(this.currentCommand.promptBuffer);
+
+      if (hasSubstantialOutput && hasPrompt) {
+        this.dbg('interactive command ready: output + prompt detected');
+        this.finalizeCommandOutput();
+        return;
+      }
+
+      // Fallback: if we have a lot of output but no clear prompt, finalize anyway
+      // This handles cases where the remote prompt pattern is unusual
+      if (this.currentCommand.output.length > 500) {
+        this.dbg('interactive command: substantial output, finalizing');
+        this.finalizeCommandOutput();
+        return;
+      }
     }
 
     // For non-interactive commands, detect when the shell prompt returns
     if (!isInteractiveCommand && this.detectShellPrompt(this.currentCommand.promptBuffer)) {
       this.dbg('prompt detected');
+      // No timeout timers to clear - removed timeout logic
       this.finalizeCommandOutput();
     }
   }
@@ -1571,10 +1681,24 @@ export class ChatTerminal {
   finalizeCommandOutput() {
     if (!this.currentCommand) return;
 
+    // Clear termination timer if it exists
+    if (this.currentCommand.terminationTimer) {
+      clearTimeout(this.currentCommand.terminationTimer);
+      this.currentCommand.terminationTimer = null;
+    }
+
     this.stripCommandSentinel();
 
-    const { output, command, cellContext, exitCode } = this.currentCommand;
+    const { output, command, cellContext, exitCode, outputPre } = this.currentCommand;
     this.dbg('finalize', { exitCode, outputBytes: output?.length || 0 });
+
+    // Store reference to finalized command for trailing output
+    this.lastFinalizedCommand = {
+      output,
+      command,
+      outputPre,
+      finalizeTime: Date.now()
+    };
 
     const cleanOutput = this.cleanTerminalOutput(output, command);
     if (cellContext?.outputPrompt) {
@@ -2143,8 +2267,12 @@ export class ChatTerminal {
       return base;
     }
 
-    const oscSentinel = `printf "\\033]133;D;smrt:${sentinelId};exit:%d\\007" $?`;
-    const textSentinel = `printf "${COMMAND_DONE_SENTINEL_PREFIX}${sentinelId}__%d__" $?`;
+    // Capture the exit code from the just‑executed command exactly once and reuse it.
+    // - Use single quotes in printf payloads to avoid additional escaping by the shell.
+    // - Emit a trailing newline on the plain-text sentinel to help shells/stdio flush promptly.
+    //   (In PTY mode it's not required, but in stdio fallbacks it improves reliability.)
+    const oscSentinel = `__SMRT_EC__=$?; printf '\\033]133;D;smrt:${sentinelId};exit:%d\\007' $__SMRT_EC__`;
+    const textSentinel = `printf '${COMMAND_DONE_SENTINEL_PREFIX}${sentinelId}__%d__\\n' $__SMRT_EC__`;
     const sentinelCommand = `${oscSentinel}; ${textSentinel}`;
 
     if (!base) {

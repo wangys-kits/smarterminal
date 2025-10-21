@@ -1715,6 +1715,10 @@ async function init() {
   if (s.ok && s.data.splitRatio) state.splitRatio = s.data.splitRatio;
   applySplitRatio();
   setupChatContextMenu();
+
+  // 注册全局命令事件处理器（只注册一次）
+  setupCommandEventHandlers();
+
   try {
     const sessionRes = await sm.session.load();
     sessionState = sessionRes?.ok && sessionRes.data ? { ...sessionRes.data } : {};
@@ -1776,6 +1780,92 @@ async function init() {
   }
 
   scheduleScrollUpdate();
+}
+
+function setupCommandEventHandlers() {
+  // 全局命令事件处理器（只注册一次）
+  // 这些处理器会查找所有 tab 中匹配的命令
+  const cmdDataHandler = (m) => {
+    // 遍历所有 tab，找到拥有该命令的 tab
+    for (const tab of state.tabs) {
+      const chatTerm = tab.chatTerm;
+      if (!chatTerm) continue;
+
+      // 检查是否是该 tab 的当前命令
+      if (chatTerm.currentCommand && chatTerm.currentCommand.commandId === m.commandId) {
+        chatTerm.currentCommand.output += m.data;
+
+        // 更新输出显示
+        if (chatTerm.currentCommand.outputPre) {
+          chatTerm.currentCommand.outputPre.textContent = chatTerm.currentCommand.output;
+        } else {
+          // 创建输出元素
+          const cellContext = chatTerm.currentCommand.cellContext;
+          if (cellContext && cellContext.outputRow) {
+            chatTerm.removeLoadingMessage(chatTerm.currentCommand.loadingEl);
+            chatTerm.currentCommand.outputPre = chatTerm.renderCellOutput(
+              cellContext,
+              chatTerm.currentCommand.output,
+              { isError: m.stream === 'stderr' }
+            );
+          }
+        }
+        break; // 找到了就停止搜索
+      }
+    }
+  };
+
+  const cmdMetricsHandler = (m) => {
+    // 命令指标处理器 - 已移除状态指示器功能
+  };
+
+  const cmdWarningHandler = (m) => {
+    console.warn(`[CommandMonitor] ${m.type}: ${m.message}`, m.metrics);
+  };
+
+  const cmdExitHandler = (m) => {
+    console.log('[cmdExitHandler] Received exit event:', m.commandId);
+
+    // 遍历所有 tab，找到拥有该命令的 tab
+    for (const tab of state.tabs) {
+      const chatTerm = tab.chatTerm;
+      if (!chatTerm) continue;
+
+      // 如果是该 tab 的当前命令，标记为完成
+      if (chatTerm.currentCommand && chatTerm.currentCommand.commandId === m.commandId) {
+        console.log('[cmdExitHandler] Command completed:', m.commandId);
+
+        // 移除加载指示器
+        if (chatTerm.currentCommand.loadingEl) {
+          chatTerm.removeLoadingMessage(chatTerm.currentCommand.loadingEl);
+        }
+
+        // 更新输出提示符
+        const cellContext = chatTerm.currentCommand.cellContext;
+        if (cellContext?.outputPrompt) {
+          const idx = cellContext.outputPrompt.dataset.index;
+          cellContext.outputPrompt.textContent = `Out [${idx}]:`;
+        }
+
+        // 标记命令完成
+        chatTerm.currentCommand.exitCode = m.code;
+        chatTerm.setCommandRunning(false, cellContext);
+        chatTerm.currentCommand = null;
+
+        // 处理队列中的下一个命令
+        chatTerm.processCommandQueue();
+        break; // 找到了就停止搜索
+      }
+    }
+  };
+
+  // 注册事件处理器（只注册一次）
+  sm.cmd.onData(cmdDataHandler);
+  sm.cmd.onMetrics(cmdMetricsHandler);
+  sm.cmd.onWarning(cmdWarningHandler);
+  sm.cmd.onExit(cmdExitHandler);
+
+  console.log('[renderer] Command event handlers registered');
 }
 
 function setupChatContextMenu() {
@@ -2031,32 +2121,68 @@ async function addNewTab(options = {}) {
   const { ptyId, mode: termMode } = spawnRes.data;
   try { if (window?.localStorage?.getItem('sm.debugTerm')) console.log('[term.spawn] ptyId', ptyId); } catch (_) {}
   const writer = (d) => {
-    try { if (window?.localStorage?.getItem('sm.debugTerm')) console.log('[term.write]', { bytes: (d||'').length }); } catch (_) {}
-    return sm.term.write({ ptyId, data: d });
+    const bytes = typeof d === 'string' ? d.length : 0;
+    try {
+      if (window?.localStorage?.getItem('sm.debugTerm')) {
+        console.log('[term.write]', { ptyId, bytes, preview: typeof d === 'string' ? d.slice(0, 120) : null });
+      }
+    } catch (_) {}
+
+    const res = sm.term.write({ ptyId, data: d });
+    if (res && typeof res.then === 'function') {
+      res.catch((err) => {
+        console.error('[term.write] failed', { ptyId, err });
+      });
+    }
+    return res;
   };
   const resizer = (c, r) => sm.term.resize({ ptyId, cols: c, rows: r });
 
   // Connect chat terminal to writer
   chatTerm.setWriter(writer);
 
-  // Set tab state getter for terminal readiness check
-  chatTerm.getTabState = () => state.tabs.find(t => t.id === id);
-
   // Connect xterm to writer
   term.onData(data => writer(data));
 
+  try {
+    if (window?.localStorage?.getItem('sm.debugTerm')) {
+      console.log('[term.spawned]', { tabId: id, ptyId });
+    }
+  } catch (_) {}
+
   // Handle data from PTY - send to both xterm and chat terminal
-  sm.term.onData(m => {
+  // Store the handler so we can clean it up when the tab is closed
+  const dataHandler = (m) => {
     if (m.ptyId === ptyId) {
+      let bytes = 0;
+      if (typeof m.data === 'string') {
+        bytes = m.data.length;
+      } else if (m.data && typeof m.data.byteLength === 'number') {
+        bytes = m.data.byteLength;
+      }
       // Lightweight debug hook without flooding: toggle via localStorage 'sm.debugTerm'
       try {
         if (window?.localStorage?.getItem('sm.debugTerm')) {
-          console.log('[renderer term.onData]', { bytes: (m.data||'').length });
+          const sample = typeof m.data === 'string' ? m.data.slice(0, 120) : null;
+          console.log('[renderer term.onData]', { ptyId, bytes, sample });
         }
       } catch (_) {}
       handleTermData(id, term, chatTerm, m.data);
     }
-  });
+  };
+  sm.term.onData(dataHandler);
+
+  // 监听进程指标更新 - 已移除状态指示器功能
+  const metricsHandler = (m) => {
+    // 进程指标处理器 - 已移除状态指示器功能
+  };
+  sm.term.onMetrics(metricsHandler);
+
+  // 监听进程警告 - 已移除 unresponsive 警告
+  const warningHandler = (m) => {
+    // Warning handler - unresponsive warnings removed
+  };
+  sm.term.onWarning(warningHandler);
 
   // SSH shell also emits via same event channel since main relays as evt.term.data
   const home = await detectHome();
@@ -2104,10 +2230,22 @@ async function addNewTab(options = {}) {
     customTitle: Boolean(initialCustomTitle),
     deleted: false,
     deletedAt: null,
+    dataHandler: dataHandler, // Store handler reference for cleanup
     // Don't mark as ready until listeners are fully attached to avoid race
     // where a fast first command runs before onData routing is installed.
     terminalReady: false
   };
+
+  // Provide tab state accessor to ChatTerminal so it can adapt commands based on backend mode
+  if (typeof chatTerm === 'object' && chatTerm) {
+    chatTerm.getTabState = () => ({
+      id: ptyId,
+      ptyId: ptyId,
+      mode: tabEntry.mode,
+      tabId: tabEntry.id,
+      cwd: tabEntry.cwd || null
+    });
+  }
 
   chatTerm.setChangeHandler(() => {
     scheduleTabSave(tabEntry);
@@ -2115,6 +2253,15 @@ async function addNewTab(options = {}) {
   });
 
   state.tabs.push(tabEntry);
+
+  // Mark terminal as ready immediately after adding to state.tabs
+  // This ensures the tab is in the state before any data arrives
+  tabEntry.terminalReady = true;
+
+  // Enable ChatTerminal input now that PTY is ready
+  chatTerm.terminalReady = true;
+  chatTerm.updateInputAffordances();
+
   setActiveTab(id, { skipSave: true });
   renderTabs();
 
@@ -2123,12 +2270,6 @@ async function addNewTab(options = {}) {
   }
 
   updateCurrentPathDisplay();
-  // Now that event handlers are wired, mark the terminal as ready.
-  // This prevents the user from issuing a command before onData routing exists.
-  const justAdded = state.tabs.find(t => t.id === id);
-  if (justAdded) {
-    justAdded.terminalReady = true;
-  }
   persistOpenTabs();
   scheduleScrollUpdate();
 }
@@ -2283,6 +2424,20 @@ window.addEventListener('resize', () => fitTerminalToPane());
 
 
 function handleTermData(tabId, term, chatTerm, data) {
+  if (typeof data !== 'string') {
+    try {
+      if (data instanceof Uint8Array || (data && typeof data.buffer === 'object')) {
+        data = new TextDecoder('utf-8').decode(data);
+      } else if (data != null) {
+        data = String(data);
+      } else {
+        data = '';
+      }
+    } catch (_) {
+      data = '';
+    }
+  }
+
   // As soon as we see any data for this tab, consider the terminal plumbing ready.
   // This complements the SM_CWD-based readiness below and avoids races.
   const tabForReady = state.tabs.find(t => t.id === tabId);
@@ -2373,28 +2528,14 @@ function handleTermData(tabId, term, chatTerm, data) {
     }
   }
 
-  // Send to chat terminal if in chat mode
-  if (state.useChatMode && chatTerm) {
-    if (state.activeId === tabId) {
-      chatTerm.handleTerminalOutput(data);
-      if (promptDetected) {
-        chatTerm.handlePromptReady();
-      }
-    } else {
-      const activeTab = getActiveTab();
-      const activeTerm = activeTab?.chatTerm;
-      if (activeTerm) {
-        activeTerm.saveMessageHistory();
-      }
-      chatTerm.restoreMessageHistory();
-      chatTerm.handleTerminalOutput(data);
-      if (promptDetected) {
-        chatTerm.handlePromptReady();
-      }
-      chatTerm.saveMessageHistory();
-      if (activeTerm) {
-        activeTerm.restoreMessageHistory();
-      }
+  // Forward PTY output to the owning chat terminal regardless of current view mode.
+  // Rationale: users may briefly switch between "Terminal" and "Chat" views or we
+  // might be rendering in the background. Gating this on `state.useChatMode` drops
+  // data chunks and leads to commands being finalized with "(no output)".
+  if (chatTerm) {
+    chatTerm.handleTerminalOutput(data);
+    if (promptDetected) {
+      chatTerm.handlePromptReady();
     }
   }
 
