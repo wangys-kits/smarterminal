@@ -13,7 +13,7 @@ const markdownRenderer = new MarkdownRenderer();
 const tabsEl = document.getElementById('tabs');
 const termEl = document.getElementById('term');
 const chatContainer = document.getElementById('chatContainer');
-const chatMessages = document.getElementById('chatMessages');
+const chatMessagesHost = document.getElementById('chatMessages');
 const chatTitle = document.getElementById('chatTitle');
 const chatTitleDisplay = document.getElementById('chatTitleDisplay');
 const chatTitleText = document.getElementById('chatTitleText');
@@ -755,6 +755,19 @@ function getActiveTab() {
   return state.tabs.find(x => x.id === state.activeId) || null;
 }
 
+function getActiveMessagesEl() {
+  const activeTab = getActiveTab();
+  return activeTab?.messagesEl || null;
+}
+
+function updateVisibleMessages(activeId = null) {
+  state.tabs.forEach((tab) => {
+    if (!tab.messagesEl) return;
+    const isActive = !state.showHome && tab.id === activeId;
+    tab.messagesEl.classList.toggle('active', isActive);
+  });
+}
+
 async function persistTab(tab) {
   if (!tab?.fileName || !tab?.chatTerm) return false;
   try {
@@ -918,6 +931,7 @@ function showHome(options = {}) {
   renderTabs();
   renderHome();
   syncChatTermActivity(null);
+  updateVisibleMessages(null);
   scheduleScrollUpdate();
 }
 
@@ -948,6 +962,7 @@ function hideHome() {
   renderTitleForTab(getActiveTab());
   renderDescriptionForTab(getActiveTab());
   renderTabs();
+  updateVisibleMessages(state.activeId);
   scheduleScrollUpdate();
 }
 
@@ -2533,10 +2548,13 @@ function copySelectedText() {
 }
 
 function selectAllText() {
+  const container = getActiveMessagesEl();
+  if (!container) return;
+
   try {
     // Create a range that selects all text in chat messages
     const range = document.createRange();
-    range.selectNodeContents(chatMessages);
+    range.selectNodeContents(container);
     
     const selection = window.getSelection();
     selection.removeAllRanges();
@@ -2546,7 +2564,9 @@ function selectAllText() {
     
     // Fallback to document.execCommand
     try {
-      chatMessages.focus();
+      if (typeof container.focus === 'function') {
+        container.focus();
+      }
       document.execCommand('selectAll', false, null);
     } catch (fallbackErr) {
       console.error('Fallback select all also failed: ', fallbackErr);
@@ -2562,6 +2582,28 @@ function applySplitRatio() {
   sm.settings.set({ splitRatio: state.splitRatio });
 }
 
+function updateTabCommandStatus(tabId, isRunning) {
+  const tab = state.tabs.find((entry) => entry.id === tabId);
+  if (!tab) return;
+
+  const previousStatus = tab.commandStatus || 'idle';
+  let nextStatus;
+
+  if (isRunning) {
+    nextStatus = 'running';
+  } else if (previousStatus === 'running') {
+    nextStatus = 'completed';
+  } else if (previousStatus === 'completed') {
+    nextStatus = 'completed';
+  } else {
+    nextStatus = 'idle';
+  }
+
+  if (previousStatus === nextStatus) return;
+  tab.commandStatus = nextStatus;
+  renderTabs();
+}
+
 function renderTabs() {
   if (!tabsEl) return;
 
@@ -2569,10 +2611,21 @@ function renderTabs() {
 
   state.tabs.forEach((t, index) => {
     const isActive = !state.showHome && t.id === state.activeId;
+    const status = t.commandStatus || 'idle';
     const tab = document.createElement('div');
-    tab.className = 'tab' + (isActive ? ' active' : '');
+    const classNames = ['tab'];
+    if (isActive) classNames.push('active');
+    if (status === 'running') classNames.push('is-running');
+    if (status === 'completed') classNames.push('is-completed');
+    tab.className = classNames.join(' ');
+    tab.dataset.status = status;
     tab.dataset.tabId = t.id;
     tab.onclick = () => setActiveTab(t.id);
+
+    const statusEl = document.createElement('span');
+    statusEl.className = 'tab-status';
+    statusEl.setAttribute('aria-hidden', 'true');
+    tab.appendChild(statusEl);
 
     const titleEl = document.createElement('span');
     titleEl.className = 'tab-title';
@@ -2715,8 +2768,24 @@ async function addNewTab(options = {}) {
   }
 });
 
+  // Create a dedicated message container per tab
+  let tabMessagesEl = null;
+  if (chatMessagesHost) {
+    tabMessagesEl = document.createElement('div');
+    tabMessagesEl.classList.add('chat-messages', 'chat-messages-pane');
+    tabMessagesEl.dataset.tabId = id;
+    chatMessagesHost.appendChild(tabMessagesEl);
+  }
+
   // Initialize chat terminal
-  const chatTerm = new ChatTerminal(chatContainer, commandInput, chatMessages, null);
+  const chatTerm = new ChatTerminal(chatContainer, commandInput, tabMessagesEl || chatMessagesHost, null);
+  const messagesEl = chatTerm?.messages || tabMessagesEl || null;
+  if (messagesEl) {
+    messagesEl.classList.add('chat-messages-pane');
+    if (!messagesEl.classList.contains('chat-messages')) {
+      messagesEl.classList.add('chat-messages');
+    }
+  }
 
   // Clear chat messages for new tab
   let restored = false;
@@ -2846,6 +2915,8 @@ async function addNewTab(options = {}) {
     deleted: false,
     deletedAt: null,
     dataHandler: dataHandler, // Store handler reference for cleanup
+    messagesEl,
+    commandStatus: 'idle',
     // Don't mark as ready until listeners are fully attached to avoid race
     // where a fast first command runs before onData routing is installed.
     terminalReady: false
@@ -2860,6 +2931,9 @@ async function addNewTab(options = {}) {
       tabId: tabEntry.id,
       cwd: tabEntry.cwd || null
     });
+    chatTerm.onCommandRunningChange = ({ isRunning } = {}) => {
+      updateTabCommandStatus(tabEntry.id, Boolean(isRunning));
+    };
   }
 
   chatTerm.setChangeHandler(() => {
@@ -2921,6 +2995,7 @@ function setActiveTab(id, { skipSave = false } = {}) {
   const t = state.tabs.find(x => x.id === id);
   if (!t) {
     syncChatTermActivity(null);
+    updateVisibleMessages(null);
     sessionState.activeTab = null;
     scheduleSessionSave();
     renderTitleForTab(null);
@@ -2950,9 +3025,22 @@ function setActiveTab(id, { skipSave = false } = {}) {
   }
 
   syncChatTermActivity(t.id);
+  updateVisibleMessages(t.id);
+  if (findInPage && !findInPage.classList.contains('hidden')) {
+    clearFindHighlights();
+    findMatches = [];
+    currentMatchIndex = -1;
+    updateFindResults();
+  }
 
   if (t.chatTerm) {
-    t.chatTerm.restoreMessageHistory();
+    if (typeof t.chatTerm.rebindLiveReferences === 'function') {
+      t.chatTerm.rebindLiveReferences();
+    }
+    t.chatTerm.updateInputAffordances();
+    if (typeof t.chatTerm.scrollToBottom === 'function') {
+      t.chatTerm.scrollToBottom();
+    }
   }
 
   renderTitleForTab(t);
@@ -2961,6 +3049,10 @@ function setActiveTab(id, { skipSave = false } = {}) {
   // Update connection status
   // Update current path in chat input with just directory name
   updateCurrentPathDisplay();
+
+  if (t.commandStatus === 'completed') {
+    t.commandStatus = 'idle';
+  }
 
   // Switch terminal UI based on mode
   if (state.useChatMode) {
@@ -3016,6 +3108,9 @@ async function closeTab(id) {
       clearTimeout(t.saveTimer);
       t.saveTimer = null;
     }
+    if (t.messagesEl && t.messagesEl.parentNode) {
+      t.messagesEl.parentNode.removeChild(t.messagesEl);
+    }
     state.tabs.splice(i, 1);
     const nextTab = state.tabs[i] || state.tabs[i - 1] || state.tabs[0] || null;
     state.activeId = nextTab ? nextTab.id : null;
@@ -3028,6 +3123,7 @@ async function closeTab(id) {
       updateCurrentPathDisplay();
       showHome();
     }
+    updateVisibleMessages(state.activeId);
     persistOpenTabs();
     try {
       await refreshSavedTabsList();
@@ -3683,7 +3779,9 @@ function hideFindInPage() {
 
 // Clear all find highlights
 function clearFindHighlights() {
-  const highlights = chatMessages.querySelectorAll('.find-highlight, .find-highlight-current');
+  const container = getActiveMessagesEl();
+  if (!container) return;
+  const highlights = container.querySelectorAll('.find-highlight, .find-highlight-current');
   highlights.forEach(highlight => {
     const parent = highlight.parentNode;
     const textNode = document.createTextNode(highlight.textContent);
@@ -3703,9 +3801,15 @@ function performFind(query) {
     return;
   }
 
+  const container = getActiveMessagesEl();
+  if (!container) {
+    updateFindResults();
+    return;
+  }
+
   const searchText = query.toLowerCase();
   const walker = document.createTreeWalker(
-    chatMessages,
+    container,
     NodeFilter.SHOW_TEXT,
     {
       acceptNode: function(node) {

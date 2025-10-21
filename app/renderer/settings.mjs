@@ -243,12 +243,30 @@ class SettingsManager {
     if (outputFontColor) outputFontColor.value = settings.outputFontColor;
   }
 
-  getFontSettings() {
+  getDefaultFontSettings() {
+    const root = document.documentElement;
+    const forcedTheme = root?.dataset?.theme;
+    const prefersDarkMedia = window.matchMedia?.('(prefers-color-scheme: dark)')?.matches;
+    const isLightTheme = forcedTheme === 'light' || (forcedTheme !== 'dark' && prefersDarkMedia !== true);
+
     return {
-      commandFontSize: localStorage.getItem('smarterminal_commandFontSize') || '14',
-      commandFontColor: localStorage.getItem('smarterminal_commandFontColor') || '#e8eaed',
-      outputFontSize: localStorage.getItem('smarterminal_outputFontSize') || '13',
-      outputFontColor: localStorage.getItem('smarterminal_outputFontColor') || '#c5c8c6'
+      commandFontSize: '14',
+      commandFontColor: isLightTheme ? '#383A42' : '#e8eaed',
+      outputFontSize: '13',
+      outputFontColor: isLightTheme ? '#4F525A' : '#c5c8c6'
+    };
+  }
+
+  getFontSettings() {
+    const defaults = this.getDefaultFontSettings();
+    const savedCommandFontColor = localStorage.getItem('smarterminal_commandFontColor');
+    const savedOutputFontColor = localStorage.getItem('smarterminal_outputFontColor');
+
+    return {
+      commandFontSize: localStorage.getItem('smarterminal_commandFontSize') || defaults.commandFontSize,
+      commandFontColor: savedCommandFontColor || defaults.commandFontColor,
+      outputFontSize: localStorage.getItem('smarterminal_outputFontSize') || defaults.outputFontSize,
+      outputFontColor: savedOutputFontColor || defaults.outputFontColor
     };
   }
 
@@ -277,12 +295,7 @@ class SettingsManager {
 
   resetFontSettings() {
     // Reset to defaults
-    const defaults = {
-      commandFontSize: '14',
-      commandFontColor: '#e8eaed',
-      outputFontSize: '13',
-      outputFontColor: '#c5c8c6'
-    };
+    const defaults = this.getDefaultFontSettings();
 
     // Update inputs
     const commandFontSize = document.getElementById('commandFontSize');
@@ -345,12 +358,24 @@ class SettingsManager {
   applySavedFontSettings() {
     const settings = this.getFontSettings();
     const root = document.documentElement;
+    const defaults = this.getDefaultFontSettings();
+    const shouldUseDefaultCommandColor = settings.commandFontColor === '#e8eaed' && defaults.commandFontColor !== '#e8eaed';
+    const shouldUseDefaultOutputColor = settings.outputFontColor === '#c5c8c6' && defaults.outputFontColor !== '#c5c8c6';
+    const commandFontColor = shouldUseDefaultCommandColor ? defaults.commandFontColor : settings.commandFontColor;
+    const outputFontColor = shouldUseDefaultOutputColor ? defaults.outputFontColor : settings.outputFontColor;
+
+    if (shouldUseDefaultCommandColor) {
+      localStorage.setItem('smarterminal_commandFontColor', commandFontColor);
+    }
+    if (shouldUseDefaultOutputColor) {
+      localStorage.setItem('smarterminal_outputFontColor', outputFontColor);
+    }
 
     // Apply saved font settings to CSS custom properties
     root.style.setProperty('--command-font-size', `${settings.commandFontSize}px`);
-    root.style.setProperty('--command-font-color', settings.commandFontColor);
+    root.style.setProperty('--command-font-color', commandFontColor);
     root.style.setProperty('--output-font-size', `${settings.outputFontSize}px`);
-    root.style.setProperty('--output-font-color', settings.outputFontColor);
+    root.style.setProperty('--output-font-color', outputFontColor);
   }
 
   // ---------------- Transfers (Downloads dir) ----------------

@@ -2,6 +2,7 @@
 const { app, BrowserWindow, ipcMain, shell, dialog, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const os = require('os');
 const Store = require('electron-store');
 let pty = null;
@@ -945,20 +946,9 @@ function formatTimestampForFile(date = new Date()) {
 }
 
 async function generateFileName() {
-  const dir = ensureTabsDir();
-  let base = formatTimestampForFile();
-  let fileName = `${base}${TAB_EXTENSION}`;
-  let counter = 1;
-  while (fs.existsSync(path.join(dir, fileName))) {
-    fileName = `${base}-${counter}${TAB_EXTENSION}`;
-    counter += 1;
-    if (counter > 999) {
-      base = formatTimestampForFile(new Date());
-      fileName = `${base}${TAB_EXTENSION}`;
-      counter = 1;
-    }
-  }
-  return fileName;
+  const timestamp = formatTimestampForFile();
+  const randomSegment = crypto.randomUUID().replace(/-/g, '').slice(0, 8);
+  return `${timestamp}-${randomSegment}${TAB_EXTENSION}`;
 }
 
 function registerTabHandlers() {
@@ -1004,8 +994,6 @@ function registerTabHandlers() {
   ipcMain.handle('tabs.create', async (_event, { title }) => {
     try {
       const safeTitle = sanitizeTitle(title);
-      const fileName = await generateFileName();
-      const filePath = tabFilePath(fileName);
       const payload = {
         title: safeTitle,
         createdAt: Date.now(),
@@ -1017,8 +1005,23 @@ function registerTabHandlers() {
         deletedAt: null,
         state: null
       };
-      await fsp.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
-      return { ok: true, data: { fileName, title: safeTitle, favorite: false, description: '', customTitle: false, createdAt: payload.createdAt, updatedAt: payload.updatedAt } };
+      ensureTabsDir();
+      let lastError = null;
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const fileName = await generateFileName();
+        const filePath = tabFilePath(fileName);
+        try {
+          await fsp.writeFile(filePath, JSON.stringify(payload, null, 2), { encoding: 'utf8', flag: 'wx' });
+          return { ok: true, data: { fileName, title: safeTitle, favorite: false, description: '', customTitle: false, createdAt: payload.createdAt, updatedAt: payload.updatedAt } };
+        } catch (err) {
+          if (err?.code === 'EEXIST') {
+            lastError = err;
+            continue;
+          }
+          throw err;
+        }
+      }
+      throw lastError || new Error('Failed to allocate unique tab file name');
     } catch (err) {
       return { ok: false, error: String(err?.message || err) };
     }

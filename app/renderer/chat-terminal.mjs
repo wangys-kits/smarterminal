@@ -7,6 +7,7 @@ import { PathCompleter } from './chat-terminal-path-completer.mjs';
 
 export const INTERACTIVE_SENTINEL = '__SMRT_INTERACTIVE_DONE__';
 const COMMAND_DONE_SENTINEL_PREFIX = '__SMRT_DONE__';
+const MAX_COMMAND_HISTORY = 500;
 
 export class ChatTerminal {
   constructor(container, inputEl, messagesEl, statusEl) {
@@ -16,6 +17,7 @@ export class ChatTerminal {
     this.statusEl = statusEl;
     this.history = [];
     this.historyIndex = -1;
+    this.historyDraft = '';
     this.currentCommand = null;
     this.writer = null;
     this.messageHistory = [];
@@ -34,6 +36,7 @@ export class ChatTerminal {
     this.changeDebounce = null;
     this.isActive = false;
     this.getTabState = null;  // Function to get current tab state
+    this.onCommandRunningChange = null; // Callback for tab-level command status
     this.terminalReady = false;  // PTY is ready to accept commands
 
     // Double Tab detection for command suggestions
@@ -621,9 +624,8 @@ export class ChatTerminal {
       return;
     }
 
-    // Add to history (code mode only)
-    this.history.push(command);
-    this.historyIndex = this.history.length;
+    // Add to per-tab history (code mode only)
+    this.recordCommandHistory(command);
 
     // Update command statistics for smart suggestions
     this.updateCommandStats(command);
@@ -648,16 +650,50 @@ export class ChatTerminal {
   navigateHistory(direction) {
     if (this.inputMode !== 'code' || this.history.length === 0) return;
 
-    this.historyIndex = Math.max(-1, Math.min(this.history.length, this.historyIndex + direction));
+    if (!Number.isFinite(this.historyIndex)) {
+      this.historyIndex = this.history.length;
+    }
+
+    const atNewestEntry = this.historyIndex >= this.history.length;
+    if (direction < 0 && atNewestEntry) {
+      // Save current draft before moving into history
+      this.historyDraft = this.input.value;
+    }
+
+    const nextIndex = Math.max(-1, Math.min(this.history.length, this.historyIndex + direction));
+    this.historyIndex = nextIndex;
 
     if (this.historyIndex >= 0 && this.historyIndex < this.history.length) {
       this.input.value = this.history[this.historyIndex];
     } else {
-      this.input.value = '';
+      // Restore draft (or fallback to empty string) when leaving history
+      this.historyIndex = this.history.length;
+      this.input.value = this.historyDraft || '';
     }
 
-    // Trigger resize
+    // Trigger resize and keep caret at end
     this.input.dispatchEvent(new Event('input'));
+    try {
+      const len = this.input.value.length;
+      this.input.setSelectionRange(len, len);
+    } catch (_) {
+      // Ignore selection errors (e.g., on unsupported inputs)
+    }
+  }
+
+  recordCommandHistory(command) {
+    if (typeof command !== 'string') return;
+    const normalized = command.trim();
+    if (!normalized) return;
+
+    this.history.push(command);
+    if (this.history.length > MAX_COMMAND_HISTORY) {
+      const excess = this.history.length - MAX_COMMAND_HISTORY;
+      this.history.splice(0, excess);
+    }
+    this.historyIndex = this.history.length;
+    this.historyDraft = '';
+    this.markDirty();
   }
 
   navigateSuggestions(direction) {
@@ -1045,6 +1081,7 @@ export class ChatTerminal {
         return;
       }
 
+      this.recordCommandHistory(newCommand);
       this.updateCommandStats(newCommand);
       this.runShellCommand(newCommand, cellContext, { fromRerun: true });
       return;
@@ -1214,7 +1251,7 @@ export class ChatTerminal {
   async copyCellOutput(cellContext) {
     if (!cellContext?.outputContent) return;
     const outputEl = cellContext.outputContent.querySelector('.cell-output-text');
-    const text = outputEl ? outputEl.textContent || '' : '';
+    const text = outputEl ? outputEl.dataset.rawOutput || outputEl.textContent || '' : '';
     if (!text) return;
 
     try {
@@ -1898,7 +1935,7 @@ export class ChatTerminal {
 
     const pre = document.createElement('pre');
     pre.className = 'cell-output-text';
-    pre.textContent = safeText || (isError ? 'Error' : '(command executed, no output)');
+    this.updateOutputPreText(pre, safeText || (isError ? 'Error' : '(command executed, no output)'));
 
     if (cellContext.outputBody) {
       cellContext.outputBody.appendChild(pre);
@@ -1916,6 +1953,36 @@ export class ChatTerminal {
     this.markDirty();
 
     return pre;
+  }
+
+  updateOutputPreText(preEl, text) {
+    if (!preEl) return;
+    const normalized = typeof text === 'string' ? text : String(text ?? '');
+    preEl.dataset.rawOutput = normalized;
+    preEl.innerHTML = '';
+
+    const lines = normalized.split('\n');
+    const lineCount = lines.length > 0 ? lines.length : 1;
+    const fragment = document.createDocumentFragment();
+
+    for (let i = 0; i < lineCount; i += 1) {
+      const lineText = lines[i] ?? '';
+      const lineWrapper = document.createElement('div');
+      lineWrapper.className = 'cell-output-line';
+
+      const numberEl = document.createElement('span');
+      numberEl.className = 'cell-output-line-number';
+      numberEl.textContent = String(i + 1);
+
+      const textEl = document.createElement('span');
+      textEl.className = 'cell-output-line-text';
+      textEl.textContent = lineText === '' ? '\u00A0' : lineText;
+
+      lineWrapper.append(numberEl, textEl);
+      fragment.appendChild(lineWrapper);
+    }
+
+    preEl.appendChild(fragment);
   }
 
   renderMarkdown(markdownText) {
@@ -1974,7 +2041,7 @@ export class ChatTerminal {
             this.lastFinalizedCommand.output,
             this.lastFinalizedCommand.command
           );
-          this.lastFinalizedCommand.outputPre.textContent = cleanOutput;
+          this.updateOutputPreText(this.lastFinalizedCommand.outputPre, cleanOutput);
 
           // Update the cell context if available
           if (this.lastFinalizedCommand.cellContext) {
@@ -1998,6 +2065,9 @@ export class ChatTerminal {
     }
 
     this.dbg('data chunk', { bytes: (typeof data === 'string' ? data.length : 0) });
+    if (this.debugEnabled && typeof data === 'string') {
+      this.dbg('chunk preview', this.formatDebugPreview(data));
+    }
     // No noDataFallbackTimer to clear - removed timeout logic
     this.currentCommand.output += data;
     const cellContext = this.currentCommand.cellContext;
@@ -2028,6 +2098,9 @@ export class ChatTerminal {
     }
 
     const cleanOutput = this.cleanTerminalOutput(this.currentCommand.output, this.currentCommand.command);
+    if (this.debugEnabled) {
+      this.dbg('clean output preview', this.formatDebugPreview(cleanOutput));
+    }
 
     // Check if this is a rerun command
     const fromRerun = this.currentCommand.fromRerun || false;
@@ -2045,7 +2118,7 @@ export class ChatTerminal {
       if (cellContext?.collapsed) {
         prevScrollTop = preEl.scrollTop;
       }
-      preEl.textContent = cleanOutput;
+      this.updateOutputPreText(preEl, cleanOutput);
       if (cellContext?.collapsed) {
         preEl.scrollTop = prevScrollTop;
       } else if (!fromRerun) {
@@ -2123,6 +2196,7 @@ export class ChatTerminal {
       output,
       command,
       outputPre,
+      cellContext,
       finalizeTime: Date.now()
     };
 
@@ -2149,7 +2223,7 @@ export class ChatTerminal {
         const isAtBottom = Math.abs(preEl.scrollHeight - preEl.clientHeight - preEl.scrollTop) < 4;
         preEl.dataset.autoScroll = isAtBottom ? '1' : '0';
       }
-      preEl.textContent = cleanOutput;
+      this.updateOutputPreText(preEl, cleanOutput);
       if (cellContext?.collapsed) {
         if (preEl.dataset.autoScroll === '1') {
           preEl.scrollTop = preEl.scrollHeight - preEl.clientHeight;
@@ -2298,6 +2372,14 @@ export class ChatTerminal {
     if (!ctx?.collapsed && !fromRerun) {
       this.scrollToBottom();
     }
+
+    if (typeof this.onCommandRunningChange === 'function') {
+      try {
+        this.onCommandRunningChange({ isRunning, cellContext: ctx });
+      } catch (err) {
+        console.error('[chat-terminal] onCommandRunningChange error:', err);
+      }
+    }
   }
 
   sendInteractiveInput(rawInput) {
@@ -2310,6 +2392,12 @@ export class ChatTerminal {
     const suggestionsEl = document.getElementById('commandSuggestions');
     if (suggestionsEl) {
       suggestionsEl.classList.add('hidden');
+    }
+
+    const trimmed = typeof rawInput === 'string' ? rawInput.trim() : '';
+    if (trimmed) {
+      this.recordCommandHistory(trimmed);
+      this.updateCommandStats(trimmed);
     }
 
     const payload = rawInput.replace(/\r?\n/g, '\r');
@@ -2387,8 +2475,7 @@ export class ChatTerminal {
       ? `/upload ${sourcePath}${targetPath ? ' ' + targetPath : ''}`
       : `/download ${sourcePath}${targetPath ? ' ' + targetPath : ''}`;
 
-    this.history.push(originalCommand);
-    this.historyIndex = this.history.length;
+    this.recordCommandHistory(originalCommand);
 
     // Create cell context with transfer mode
     const cellContext = this.addUserMessage(originalCommand, { startEditing: true });
@@ -2689,6 +2776,14 @@ export class ChatTerminal {
   cleanTerminalOutput(output, command) {
     let clean = output;
 
+    if (this.debugEnabled) {
+      this.dbg('cleanTerminalOutput start', {
+        len: typeof clean === 'string' ? clean.length : 0,
+        preview: this.formatDebugPreview(clean),
+        command: this.formatDebugPreview(command, 80)
+      });
+    }
+
     // Normalize newlines early so line-based regex with /m works with CR-only outputs
     if (clean && typeof clean === 'string') {
       clean = clean.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -2704,11 +2799,10 @@ export class ChatTerminal {
 
     // Step 3: Remove ALL ANSI escape sequences (colors, cursor movements, etc.)
     // This must be done BEFORE trying to match prompts
-    clean = clean.replace(/\x1b\[[0-9;]*m/g, '');  // SGR (colors)
-    clean = clean.replace(/\x1b\[[0-9;]*[ABCDEFGHJKSTfimnsulh]/g, '');  // CSI
-    clean = clean.replace(/\x1b[()=<>]/g, '');
-    clean = clean.replace(/\x1b\[[\?#][0-9;]*[a-z]/gi, '');
-    clean = clean.replace(/\x1b[PX^_][\s\S]*?\x1b\\/g, '');
+    const ansiEscapePattern = /(?:\u001b\[|\u009b)[0-?]*[ -\/]*[@-~]|\u001b[ -\/]*[\d@-~<>=?]/g;
+    clean = clean.replace(ansiEscapePattern, '');
+    // Remove OSC/DCS style sequences that use ST terminators (e.g. ESC P ... ESC \)
+    clean = clean.replace(/\u001b[PX^_][\s\S]*?\u001b\\/g, '');
 
     // Step 4: Remove control characters
     clean = clean.replace(/([\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f])+/g, '');
@@ -2734,12 +2828,30 @@ export class ChatTerminal {
       return '';  // Return empty string for commands with no visible output (like cd)
     }
 
+    if (this.debugEnabled) {
+      this.dbg('cleanTerminalOutput end', {
+        len: typeof clean === 'string' ? clean.length : 0,
+        preview: this.formatDebugPreview(clean)
+      });
+    }
+
     return clean || '';
   }
 
   // Helper function to escape special regex characters
   escapeRegExp(string) {
     return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  formatDebugPreview(value, limit = 160) {
+    if (value === undefined) return '(undefined)';
+    if (value === null) return '(null)';
+    const str = typeof value === 'string' ? value : String(value);
+    const truncated = str.length > limit ? str.slice(0, limit) + '...' : str;
+    return truncated
+      .replace(/\r/g, '\\r')
+      .replace(/\n/g, '\\n')
+      .replace(/\t/g, '\\t');
   }
 
   addOutputMessage(output, isError = false) {
@@ -2954,6 +3066,8 @@ export class ChatTerminal {
     this.commandQueue = [];
     this.currentCommand = null;
     this.clearCellSelection();
+    this.historyDraft = '';
+    this.historyIndex = Array.isArray(this.history) ? this.history.length : 0;
     this.updateInputAffordances();
   }
 
@@ -3688,13 +3802,22 @@ export class ChatTerminal {
         messages.push(node.outerHTML);
       }
     }
+    const historySnapshot = Array.isArray(this.history)
+      ? this.history.slice(-MAX_COMMAND_HISTORY)
+      : [];
+    const clampedHistoryIndex = Math.max(
+      -1,
+      Math.min(historySnapshot.length, Number.isFinite(this.historyIndex) ? this.historyIndex : historySnapshot.length)
+    );
     return {
       messages,
       cellCounter: this.cellCounter,
       savedCellCounter: this.savedCellCounter,
       cellIdCounter: this.cellIdCounter,
       inputMode: this.inputMode,
-      savedInputMode: this.savedInputMode
+      savedInputMode: this.savedInputMode,
+      history: historySnapshot,
+      historyIndex: clampedHistoryIndex
     };
   }
 
@@ -3702,6 +3825,16 @@ export class ChatTerminal {
     if (!state || typeof state !== 'object') return;
     const messages = Array.isArray(state.messages) ? state.messages : [];
     this.messageHistory = messages.slice();
+    const rawHistory = Array.isArray(state.history)
+      ? state.history.filter((cmd) => typeof cmd === 'string' && cmd.trim())
+      : [];
+    const historySlice = rawHistory.slice(-MAX_COMMAND_HISTORY);
+    this.history = historySlice;
+    const storedIndex = Number.isFinite(state.historyIndex)
+      ? Math.trunc(state.historyIndex)
+      : historySlice.length;
+    this.historyIndex = Math.max(-1, Math.min(historySlice.length, storedIndex));
+    this.historyDraft = '';
     this.savedCellCounter = Number.isFinite(state.savedCellCounter)
       ? state.savedCellCounter
       : (Number.isFinite(state.cellCounter) ? state.cellCounter : 1);
