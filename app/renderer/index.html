@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; connect-src 'self';" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Smarterminal</title>
+  <title>SmartTerminal</title>
   <link rel="stylesheet" href="../../design-system/modern/tokens.css" />
   <link rel="stylesheet" href="../../node_modules/xterm/css/xterm.css" />
   <link rel="stylesheet" href="styles.css" />
@@ -16,8 +16,8 @@
   <div class="toolbar">
     <div class="toolbar-left">
       <div class="app-title">
-        <img src="assets/logo.svg" alt="Smarterminal" class="app-logo" />
-        <span>Smarterminal</span>
+        <img src="assets/logo.svg" alt="SmartTerminal" class="app-logo" />
+        <span>SmartTerminal</span>
       </div>
       <!-- Tab Bar -->
       <div class="tab-bar-inline">
@@ -45,11 +45,12 @@
     <section class="home-intro">
       <div class="home-intro-content">
         <span class="home-intro-kicker" data-i18n="home.intro.kicker">智能终端工作台</span>
-        <h1 class="home-intro-title" data-i18n="app.title">Smarterminal</h1>
+        <h1 class="home-intro-title" data-i18n="app.title">SmartTerminal</h1>
         <p class="home-intro-subtitle" data-i18n="home.intro.subtitle">让命令行与结构化笔记在一个界面内协同，保持专注与节奏。</p>
         <div class="home-intro-actions">
           <button class="btn-primary home-intro-primary" type="button" data-action="new-tab" data-i18n="home.action.newChat">开始新的对话</button>
-          <button class="btn-secondary home-intro-secondary" type="button" data-scroll-target="#homeAllSection" data-i18n="home.action.browseAll">浏览全部对话</button>
+          <button class="btn-secondary home-intro-secondary" type="button" id="homeAllConversationsBtn" data-i18n="home.action.allConversations">全部对话</button>
+          <button class="btn-secondary home-intro-secondary" type="button" id="homeRecycleBinBtn" data-i18n="home.action.recycleBin">回收站</button>
           <button class="btn-secondary home-intro-secondary" type="button" id="homeSettingsBtn" data-i18n="home.action.settings">打开设置</button>
         </div>
       </div>
@@ -98,39 +99,95 @@
       </div>
     </section>
 
-    <section class="home-section" id="homeAllSection">
-      <div class="home-section-header">
-        <div class="home-section-title-group">
-          <h2 class="home-section-title" data-i18n="section.all">全部对话</h2>
-          <span class="home-section-hint" data-i18n="section.all.hint">所有会话历史，随时恢复工作上下文</span>
-        </div>
-        <div class="home-section-actions">
-          <button class="home-icon-button" type="button" data-action="new-tab" aria-label="新建对话">＋</button>
-        </div>
-      </div>
-      <div id="homeAllEmpty" class="home-empty" data-i18n="section.all.empty">还没有保存的对话，点击"开始新的对话"开启第一步。</div>
-      <div class="home-section-body">
-        <div id="homeAllList" class="home-card-grid" data-home-list="all"></div>
-        <div id="homeAllIndicators" class="home-page-indicators hidden" aria-label="全部对话分页导航"></div>
-      </div>
-    </section>
+  </div>
 
-    <section class="home-section" id="homeRecycleSection">
-      <div class="home-section-header">
-        <div class="home-section-title-group">
-          <h2 class="home-section-title" data-i18n="section.trash">回收站</h2>
-          <span class="home-section-hint" data-i18n="section.trash.hint">临时保留的对话可随时恢复或清理</span>
+  <!-- All Conversations View -->
+  <div id="allConversationsView" class="settings-view hidden">
+    <div class="settings-container">
+      <div class="settings-header">
+        <button class="settings-back-button" id="allConversationsBackBtn" aria-label="返回首页">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
+          <span data-i18n="settings.back">返回首页</span>
+        </button>
+        <h1 class="settings-title" data-i18n="section.all">全部对话</h1>
+      </div>
+
+      <div class="settings-content">
+        <!-- Search Box -->
+        <div class="search-box-container">
+          <div class="search-box">
+            <svg class="search-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="M21 21l-4.35-4.35"/>
+            </svg>
+            <input
+              type="text"
+              id="allConversationsSearch"
+              class="search-input"
+              placeholder="搜索对话内容、命令或输出..."
+              data-i18n-placeholder="search.placeholder"
+            />
+            <button id="allConversationsClearSearch" class="search-clear-btn hidden" aria-label="清除搜索">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 6L6 18M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <div id="allConversationsSearchStatus" class="search-status hidden"></div>
         </div>
-        <div class="home-section-actions">
-          <button id="homeRecycleClear" class="btn-secondary" type="button" data-i18n="home.action.clearTrash">清空回收站</button>
+
+        <div class="home-section-header">
+          <div class="home-section-title-group">
+            <span class="home-section-hint" data-i18n="section.all.hint">所有会话历史，随时恢复工作上下文</span>
+          </div>
+          <div class="home-section-actions">
+            <button class="home-icon-button" type="button" data-action="new-tab" aria-label="新建对话">＋</button>
+          </div>
+        </div>
+        <div id="allConversationsEmpty" class="home-empty" data-i18n="section.all.empty">还没有保存的对话，点击"开始新的对话"开启第一步。</div>
+        <div id="allConversationsNoResults" class="home-empty hidden">未找到匹配的对话</div>
+        <div class="home-section-body">
+          <div id="allConversationsList" class="home-card-grid home-card-grid-2col" data-home-list="all-page"></div>
+          <div id="allConversationsLoading" class="loading-indicator hidden">
+            <div class="loading-spinner"></div>
+            <span>加载更多...</span>
+          </div>
         </div>
       </div>
-      <div id="homeRecycleEmpty" class="home-empty" data-i18n="section.trash.empty">回收站为空。</div>
-      <div class="home-section-body">
-        <div id="homeRecycleList" class="home-card-grid" data-home-list="recycle"></div>
-        <div id="homeRecycleIndicators" class="home-page-indicators hidden" aria-label="回收站分页导航"></div>
+    </div>
+  </div>
+
+  <!-- Recycle Bin View -->
+  <div id="recycleBinView" class="settings-view hidden">
+    <div class="settings-container">
+      <div class="settings-header">
+        <button class="settings-back-button" id="recycleBinBackBtn" aria-label="返回首页">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
+          <span data-i18n="settings.back">返回首页</span>
+        </button>
+        <h1 class="settings-title" data-i18n="section.trash">回收站</h1>
       </div>
-    </section>
+
+      <div class="settings-content">
+        <div class="home-section-header">
+          <div class="home-section-title-group">
+            <span class="home-section-hint" data-i18n="section.trash.hint">临时保留的对话可随时恢复或清理</span>
+          </div>
+          <div class="home-section-actions">
+            <button id="recycleBinClear" class="btn-secondary" type="button" data-i18n="home.action.clearTrash">清空回收站</button>
+          </div>
+        </div>
+        <div id="recycleBinEmpty" class="home-empty" data-i18n="section.trash.empty">回收站为空。</div>
+        <div class="home-section-body">
+          <div id="recycleBinList" class="home-card-grid" data-home-list="recycle-page"></div>
+          <div id="recycleBinIndicators" class="home-page-indicators hidden" aria-label="回收站分页导航"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Settings View -->
@@ -178,6 +235,99 @@
               <input type="radio" name="theme" value="system" class="settings-radio" />
               <span class="settings-option-label" data-i18n="settings.theme.system">跟随系统</span>
             </label>
+          </div>
+        </div>
+
+        <!-- Font Setting -->
+        <div class="settings-section">
+          <h2 class="settings-section-title" data-i18n="settings.font">字体</h2>
+
+          <!-- Command Font -->
+          <div class="settings-subsection">
+            <h3 class="settings-subsection-title" data-i18n="settings.font.command">命令行字体</h3>
+            <div class="settings-control-group">
+              <label class="settings-control">
+                <span class="settings-control-label" data-i18n="settings.font.size">字体大小</span>
+                <div class="settings-spinner-container">
+                  <button type="button" class="settings-spinner-btn settings-spinner-down" data-target="commandFontSize">
+                    <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                      <path d="M8 11L3 6h10z"/>
+                    </svg>
+                  </button>
+                  <input type="number" id="commandFontSize" min="10" max="24" value="14" class="settings-number-input" />
+                  <span class="settings-control-unit">px</span>
+                  <button type="button" class="settings-spinner-btn settings-spinner-up" data-target="commandFontSize">
+                    <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                      <path d="M8 5l5 5H3z"/>
+                    </svg>
+                  </button>
+                </div>
+              </label>
+              <label class="settings-control">
+                <span class="settings-control-label" data-i18n="settings.font.color">字体颜色</span>
+                <input type="color" id="commandFontColor" value="#e8eaed" class="settings-color-input" />
+              </label>
+            </div>
+          </div>
+
+          <!-- Output Font -->
+          <div class="settings-subsection">
+            <h3 class="settings-subsection-title" data-i18n="settings.font.output">回显字体</h3>
+            <div class="settings-control-group">
+              <label class="settings-control">
+                <span class="settings-control-label" data-i18n="settings.font.size">字体大小</span>
+                <div class="settings-spinner-container">
+                  <button type="button" class="settings-spinner-btn settings-spinner-down" data-target="outputFontSize">
+                    <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                      <path d="M8 11L3 6h10z"/>
+                    </svg>
+                  </button>
+                  <input type="number" id="outputFontSize" min="10" max="24" value="13" class="settings-number-input" />
+                  <span class="settings-control-unit">px</span>
+                  <button type="button" class="settings-spinner-btn settings-spinner-up" data-target="outputFontSize">
+                    <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+                      <path d="M8 5l5 5H3z"/>
+                    </svg>
+                  </button>
+                </div>
+              </label>
+              <label class="settings-control">
+                <span class="settings-control-label" data-i18n="settings.font.color">字体颜色</span>
+                <input type="color" id="outputFontColor" value="#c5c8c6" class="settings-color-input" />
+              </label>
+            </div>
+          </div>
+
+          <div class="settings-actions">
+            <button id="resetFontBtn" class="settings-button settings-button-secondary" data-i18n="settings.font.reset">恢复默认</button>
+            <button id="applyFontBtn" class="settings-button settings-button-primary" data-i18n="settings.font.apply">应用</button>
+          </div>
+        </div>
+
+        <!-- Transfers Setting -->
+        <div class="settings-section">
+          <h2 class="settings-section-title" data-i18n="settings.transfers">文件传输</h2>
+          <div class="settings-subsection">
+            <h3 class="settings-subsection-title" data-i18n="settings.transfers.downloads">下载</h3>
+            <div class="form-group">
+              <label class="form-label" for="downloadsDirInput" data-i18n="settings.transfers.downloadsDir">下载保存目录</label>
+              <div class="input-group">
+                <div class="path-input">
+                  <span class="path-prefix" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                      <path d="M10 4H4c-1.1 0-2 .9-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8l-6-4h-6zm0 2v4h6V6h-6z"/>
+                    </svg>
+                  </span>
+                  <input type="text" id="downloadsDirInput" class="form-input path-input-field" placeholder="~/Downloads" />
+                </div>
+                <button id="chooseDownloadsDirBtn" class="settings-button settings-button-secondary" type="button" data-i18n="settings.transfers.choose">选择…</button>
+              </div>
+              <div class="form-hint" id="downloadsDirHint">默认保存到系统下载文件夹，可在此处修改。</div>
+            </div>
+            <div class="settings-actions">
+              <button id="resetDownloadsDirBtn" class="settings-button settings-button-secondary" type="button">恢复默认</button>
+              <button id="saveTransfersBtn" class="settings-button settings-button-primary" type="button" data-i18n="settings.save">保存</button>
+            </div>
           </div>
         </div>
       </div>
@@ -233,6 +383,38 @@
           <button id="scrollToBottomBtn" class="chat-scroll-btn" title="滚动到底" data-i18n-title="chat.scroll.bottom">↓</button>
         </div>
 
+        <!-- Find in Page -->
+        <div class="find-in-page hidden" id="findInPage">
+          <div class="find-in-page-content">
+            <input
+              type="text"
+              id="findInput"
+              class="find-input"
+              placeholder="查找..."
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <div class="find-results" id="findResults">
+              <span id="findResultsText">0/0</span>
+            </div>
+            <button id="findPrevBtn" class="find-btn" title="上一个 (Shift+Enter)" aria-label="上一个">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                <path d="M8 11L3 6h10z"/>
+              </svg>
+            </button>
+            <button id="findNextBtn" class="find-btn" title="下一个 (Enter)" aria-label="下一个">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                <path d="M8 5l5 5H3z"/>
+              </svg>
+            </button>
+            <button id="findCloseBtn" class="find-btn find-close-btn" title="关闭 (Esc)" aria-label="关闭">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
         <!-- Command Input Area -->
         <div class="command-input-wrapper">
           <div class="command-input-container">
@@ -258,7 +440,7 @@
           <div class="suggestions-list" id="suggestionsList"></div>
         </div>
       </div>
-        
+
         <!-- Chat Context Menu -->
         <div id="chatContextMenu" class="context-menu hidden">
           <div class="context-menu-item" data-action="copy">
@@ -275,7 +457,7 @@
     </div>
   </div>
 
-  
+
   <!-- Transfer Drawer -->
   <div id="txDrawer" class="transfer-drawer hidden">
     <div class="transfer-drawer-header">
@@ -286,6 +468,19 @@
       </div>
     </div>
     <div id="txList" class="transfer-list"></div>
+  </div>
+
+  <!-- Tab Context Menu -->
+  <div id="tabContextMenu" class="context-menu hidden">
+    <div class="context-menu-item" data-action="close">
+      <span data-i18n="tab.contextMenu.close">关闭</span>
+    </div>
+    <div class="context-menu-item" data-action="closeOthers">
+      <span data-i18n="tab.contextMenu.closeOthers">关闭其他</span>
+    </div>
+    <div class="context-menu-item" data-action="closeAll">
+      <span data-i18n="tab.contextMenu.closeAll">关闭全部</span>
+    </div>
   </div>
 
   <!-- File Context Menu -->

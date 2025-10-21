@@ -1,5 +1,5 @@
 // Electron main process. Minimal secure defaults + IPC whitelist.
-const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -387,6 +387,58 @@ ipcMain.handle('term.write', (_e, { ptyId, data }) => {
   return { ok: true };
 });
 
+// Clipboard helpers: best-effort extraction of file paths copied from Finder/Explorer
+ipcMain.handle('clipboard.readFilePaths', () => {
+  try {
+    const types = clipboard.availableFormats() || [];
+    const urls = [];
+
+    // text/uri-list may contain multiple lines
+    if (types.includes('text/uri-list')) {
+      const s = clipboard.read('text/uri-list') || '';
+      s.split(/\r?\n/).forEach(line => {
+        const t = (line || '').trim();
+        if (!t || t.startsWith('#')) return;
+        if (/^file:\/\//i.test(t)) urls.push(t);
+      });
+    }
+
+    // macOS public.file-url (single URL)
+    if (types.includes('public.file-url')) {
+      // Try textual first, then raw buffer as UTF-8
+      let s = clipboard.read('public.file-url');
+      if (!s) {
+        try { s = clipboard.readBuffer('public.file-url').toString('utf8'); } catch (_) { s = ''; }
+      }
+      s = (s || '').trim();
+      if (s) urls.push(s);
+    }
+
+    const paths = [];
+    for (const u of urls) {
+      try {
+        const urlObj = new URL(u);
+        if (urlObj.protocol !== 'file:') continue;
+        let p = decodeURIComponent(urlObj.pathname || '');
+        if (/^\/[A-Za-z]:\//.test(p)) p = p.slice(1);
+        paths.push(p);
+      } catch (_) {}
+    }
+
+    // As fallback, if clipboard plain text looks like an absolute path
+    if (paths.length === 0) {
+      const plain = (clipboard.readText() || '').trim();
+      const isAbsUnix = plain.startsWith('/');
+      const isAbsWin = /^[A-Za-z]:[\\/]/.test(plain) || plain.startsWith('\\\\');
+      if (isAbsUnix || isAbsWin) paths.push(plain);
+    }
+
+    return { ok: true, data: paths };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+
 ipcMain.handle('term.resize', (_e, { ptyId, cols, rows }) => {
   const p = PTYS.get(ptyId);
   if (!p) return { ok: false, error: 'PTY_NOT_FOUND' };
@@ -654,7 +706,24 @@ ipcMain.handle('fs.list', async (_e, { path: dir }) => {
 });
 
 // Settings / session
-ipcMain.handle('settings.get', () => ({ ok: true, data: settings.store }));
+ipcMain.handle('settings.get', () => {
+  // Ensure a sensible default downloads directory exists in settings
+  // Lazily populate from Electron to avoid early getPath timing issues
+  try {
+    const current = settings.store || {};
+    if (!current.downloadsDir) {
+      const dl = app.getPath('downloads');
+      if (dl && typeof dl === 'string') {
+        settings.set({ downloadsDir: dl });
+      } else {
+        // Fallback: ~/Downloads (best-effort)
+        const fallback = path.join(os.homedir(), 'Downloads');
+        settings.set({ downloadsDir: fallback });
+      }
+    }
+  } catch (_) { /* ignore */ }
+  return ({ ok: true, data: settings.store });
+});
 ipcMain.handle('settings.set', (_e, partial) => {
   settings.set(partial || {});
   return { ok: true, data: settings.store };
@@ -663,6 +732,16 @@ ipcMain.handle('settings.set', (_e, partial) => {
 ipcMain.handle('session.load', () => ({ ok: true, data: sessionStore.store }));
 ipcMain.handle('session.save', (_e, s) => { sessionStore.set(s || {}); return { ok: true }; });
 
+ipcMain.handle('app.getHomeDir', () => ({ ok: true, data: os.homedir() }));
+ipcMain.handle('app.getDownloadsDir', () => {
+  try {
+    const p = app.getPath('downloads');
+    return { ok: true, data: p };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('app.getPlatform', () => ({ ok: true, data: process.platform }));
 ipcMain.handle('app.openExternal', (_e, url) => { shell.openExternal(url); return { ok: true }; });
 ipcMain.handle('app.openDialog', async (_e, { type, options }) => {
   try {
@@ -1052,6 +1131,40 @@ ipcMain.handle('fs.createFile', async (_e, { path: filePath }) => {
   try {
     await fs.promises.writeFile(filePath, '', { flag: 'wx' });
     return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+
+// File copy handler (for local file transfer)
+ipcMain.handle('fs.copy', async (_e, { sourcePath, targetPath }) => {
+  try {
+    // Check if source exists
+    await fs.promises.access(sourcePath, fs.constants.R_OK);
+
+    // Determine if target is a directory
+    let actualTargetPath = targetPath;
+    try {
+      const targetStat = await fs.promises.stat(targetPath);
+      if (targetStat.isDirectory()) {
+        // Target is a directory, append source filename
+        const fileName = path.basename(sourcePath);
+        actualTargetPath = path.join(targetPath, fileName);
+      }
+    } catch (err) {
+      // Target doesn't exist or is not accessible, use as-is
+    }
+
+    // Copy the file
+    await fs.promises.copyFile(sourcePath, actualTargetPath);
+
+    return {
+      ok: true,
+      data: {
+        sourcePath,
+        targetPath: actualTargetPath
+      }
+    };
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };
   }

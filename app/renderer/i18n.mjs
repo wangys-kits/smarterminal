@@ -13,6 +13,8 @@ const translations = {
     'home.action.browseAll': '浏览全部对话',
     'home.action.settings': '打开设置',
     'home.action.clearTrash': '清空回收站',
+    'home.action.allConversations': '全部对话',
+    'home.action.recycleBin': '回收站',
 
     // Tabs
     'tab.untitled': '未命名',
@@ -79,6 +81,13 @@ const translations = {
     'settings.theme.light': '亮色',
     'settings.theme.dark': '暗色',
     'settings.theme.system': '跟随系统',
+    'settings.font': '字体',
+    'settings.font.command': '命令行字体',
+    'settings.font.output': '回显字体',
+    'settings.font.size': '字体大小',
+    'settings.font.color': '字体颜色',
+    'settings.font.apply': '应用',
+    'settings.font.reset': '重置',
     'settings.back': '返回首页',
 
     // Buttons
@@ -123,6 +132,8 @@ const translations = {
     'home.action.browseAll': 'Browse All Sessions',
     'home.action.settings': 'Open Settings',
     'home.action.clearTrash': 'Empty Trash',
+    'home.action.allConversations': 'All Conversations',
+    'home.action.recycleBin': 'Recycle Bin',
 
     // Tabs
     'tab.untitled': 'Untitled',
@@ -189,6 +200,13 @@ const translations = {
     'settings.theme.light': 'Light',
     'settings.theme.dark': 'Dark',
     'settings.theme.system': 'System',
+    'settings.font': 'Font',
+    'settings.font.command': 'Command Font',
+    'settings.font.output': 'Output Font',
+    'settings.font.size': 'Font Size',
+    'settings.font.color': 'Font Color',
+    'settings.font.apply': 'Apply',
+    'settings.font.reset': 'Reset',
     'settings.back': 'Back to Home',
 
     // Buttons

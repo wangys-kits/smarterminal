@@ -1,14 +1,37 @@
 # Smarterminal
 
-Modern, cross-platform terminal + file manager built with Electron. Smarterminal pairs a fast terminal, tabbed workspace, split layout, and file explorer in a single window with optional SSH integration.
+Modern, cross‑platform "intelligent terminal workspace" built with Electron. Current focus is a chat‑style terminal (notebook‑like cells) with per‑tab persistence, i18n, and basic process/output tooling. Classic xterm remains available alongside the chat surface.
 
-## Key Features
-- **Tabbed terminal workspaces** — create, activate, and close terminals with a single click.
-- **Dual terminal modes** — classic xterm-based terminal plus an experimental chat-style shell surface.
-- **Persistent layout** — resizable split between terminal and files, with ratios saved per user.
-- **Rich file explorer** — current working directory browser with sorting, refresh, and path sync from the shell.
-- **Optional SSH sessions** — connect to remote hosts (via `ssh2`) with host-key trust prompts and terminal streaming.
-- **Modern styling** — tokenized design system and custom xterm theme for the “modern” visual identity.
+## Key Features (Implemented)
+- Chat‑style terminal (“notebook” cells)
+  - Shift+Enter to run; Enter for newline; Ctrl+C to interrupt
+  - Per‑cell output area with collapse, copy, re‑run, and timers
+  - Convert between code and Markdown cells; inline Markdown editor (Shift+Enter to render)
+  - Command queueing; interactive command heuristics and completion sentinels
+- Tabs and Home view
+  - Tabs persist as files under app data (`tabs/*.smt`) with title, favorite flag, description, and message state
+  - Home screen shows Favorites / All / Recycle with previews; rename and Markdown description editing
+- Terminal engine
+  - Prefers `node-pty`; falls back to stdio `spawn` when PTY is unavailable
+  - PTY/stdio aware stop/kill: Ctrl+C first, force kill for non‑responsive stdio shells
+- Monitoring & logs
+  - Lightweight per‑process monitor (CPU, memory, output rate, runtime); warnings are forwarded to renderer but UI indicators are minimal/disabled by default
+  - Stream all command/terminal output to rotating log files under app data (`command-outputs/*.log`)
+- i18n
+  - Built‑in locales: `zh-CN`, `en`; instant UI switching in renderer
+
+- Transfer drawer (scaffold)
+  - Upload/download queue with pause/resume/cancel and conflict resolution UI (rename/overwrite/skip)
+  - SFTP primitives wired in main process; SSH connect flow to be added
+
+- Command palette (scaffold)
+  - Modal with live filter and basic actions (e.g. Close Tab, Clear Terminal)
+  - Global shortcut not bound yet
+
+## Not Yet Implemented (Roadmap)
+- SSH connection management UI and terminal sessions (foundation exists; no user‑visible connect flow yet)
+- Full file explorer pane and CWD sync; current code includes basic fs ops and a transfer drawer UI only
+- Auto‑update, credentials vault, port forwarding, and advanced SSH features from the original PRD
 
 ## Getting Started
 
@@ -34,54 +57,85 @@ npm_config_cache=./node-cache npm install
 npx electron@29 .
 ```
 
-### Optional: SSH Support
-SSH features are disabled unless the `ssh2` runtime dependency can be resolved. Install the optional packages to enable the remote shell workflow:
-```bash
-npm install --cache ./node-cache ssh2 ssh2-sftp-client
-```
+### Optional: Native/SSH Modules
+- PTY: `node-pty` is installed by default; if native build fails, the app automatically falls back to stdio mode.
+- SSH/SFTP: groundwork exists but the UI is not wired. You can install optional deps for development:
+  ```bash
+  npm install --cache ./node-cache ssh2
+  ```
+  The SFTP transfer manager internally expects an established SSH connection; no public IPC to create one is exposed yet.
+
+## Usage Basics
+- Create a new session tab from the home screen; double‑click the title to rename.
+- Type commands in the composer; press Shift+Enter to execute, Enter for newline.
+- Use Markdown cells for notes; Shift+Enter to render.
+- Each run appears as a cell with output that you can collapse or copy.
+- Sessions auto‑save; find them later under Home → Favorites/All/Recycle.
+
+### Keyboard Shortcuts
+- Shift+Enter: execute current composer content (command or Markdown)
+- Enter: newline in composer; Ctrl+C: interrupt running command; Esc: clear composer/close modals
+- Ctrl/Cmd+N: new tab; Ctrl/Cmd+W: close tab
+- Ctrl+Tab / Ctrl+Shift+Tab: switch tabs; Ctrl/Cmd+1..9: jump to tab index
+- F5: refresh files (when file area is visible)
+  
+Chat-terminal specific:
+- When composer is unfocused: `C` code mode; `M` Markdown mode
+- With a cell selected: `A` insert above; `B` insert below; double‑tap `D` delete cell
+- With a cell selected: `M` to Markdown; `C` to code/start editing
+- In composer: `Tab` open suggestions; `↑/↓` navigate; `Enter` accept
+
+Note: A command palette modal exists but no global shortcut yet.
 
 ## npm Scripts
 
 | Script | Description |
 | ------ | ----------- |
-| `npm start` | Launch Electron in development mode with auto-opened DevTools. |
+| `npm start` | Launch Electron. DevTools open only when `NODE_ENV=development`. |
 | `npm run pack` | Build unpackaged distributables (Electron Builder `--dir`). |
 | `npm run dist` | Produce platform installers / artifacts via Electron Builder. |
 
 These scripts rely on the Electron Builder configuration in `package.json` for macOS, Windows, and Linux targets.
 
 ## Project Structure
-- `app/main.js` — Electron main process, IPC contracts, PTY and SSH lifecycle, secure window defaults.
-- `app/preload.js` — context-isolated preload bridge exposing a whitelisted API to the renderer.
-- `app/renderer/` — UI code (vanilla JS + modules) for tabs, terminals, chat mode, file explorer, and SSH modals.
-- `design-system/modern/` — CSS variables, tokens, and xterm theme JSON for the “modern” skin.
-- `docs/` — design references and mockups for future UI iterations.
-- `node-cache/` — local npm cache directory (excluded from Git; safe to delete to reclaim space).
+- `app/main.js` — Electron main process: window, IPC, PTY/stdio terminal lifecycle, process monitoring, output streaming, per‑tab persistence, basic fs ops, transfer manager scaffold
+- `app/preload.js` — context‑isolated bridge exposing whitelisted APIs (`term.*`, `cmd.*`, `fs.*`, `tabs.*`, `tx.*`, `settings.*`, `session.*`)
+- `app/renderer/` — Vanilla JS modules for chat‑style terminal, tabs/home, i18n, and minimal transfer UI; xterm is loaded via script tag
+- `design-system/modern/` — CSS tokens and theme assets
+- `docs/` — PRD/tech docs and UI references
+- `node-cache/` — local npm cache directory (safe to delete)
+
+### Settings (UI)
+- Language and theme: live switch `zh-CN`/`en` and `dark`/`light`/`system`
+- Fonts: per‑surface overrides for command and output areas (size/color), persisted in `localStorage`
+
+## Data Locations
+- Tabs/sessions: `${userData}/tabs/*.smt`
+- Output logs: `${userData}/command-outputs/*.log`
+  
+On macOS, `${userData}` defaults to `~/Library/Application Support/SmartTerminal/`.
 
 ## Architecture Notes
-- Terminals default to `node-pty` when available. In environments where native modules cannot build, the app gracefully degrades to a stdio shell with limited capabilities.
-- Layout and session data are persisted with `electron-store` (`settings`, `session`, and `known_hosts` stores).
-- IPC channels are explicitly whitelisted (`term.*`, `fs.*`, `ssh.*`, etc.). The renderer runs sandboxed with `contextIsolation` and no Node.js globals.
-- SSH connections prompt for trust when a new host fingerprint is seen; persisted trust is stored in `known_hosts`.
+- Renderer is sandboxed: `contextIsolation: true`, `sandbox: true`, no Node globals; strict CSP in `index.html`
+- IPC is explicitly whitelisted in preload; request/response shape is `{ ok, data? , error? }`
+- PTY first, stdio fallback: stop/force‑kill strategy differs per mode
+- Per‑tab persistence uses JSON files under app data (`tabs/*.smt`), managed entirely in the main process
+- Settings/session persisted via `electron-store`
+ - File ops IPC: `fs.list|rename|delete|mkdir|createFile|copy` (local only)
 
 ## Packaging & Distribution
-Electron Builder targets are defined in `package.json`:
-- macOS: default category `public.app-category.developer-tools`
-- Windows: NSIS installer (`build/icon.ico`)
-- Linux: AppImage, DEB, and RPM packages
-
-Use `npm run pack` for quick test builds or `npm run dist` for platform installers. Generated artifacts appear under the `dist/` directory (ignored by Git).
+Electron Builder config is present. Current binaries focus on local development; some roadmap features (auto‑update, code signing) are not wired in the app code yet.
 
 ## Troubleshooting
-- **Electron download blocked** — re-run install with the bundled cache or temporarily use `npx electron@29 .` which fetches binaries on demand.
-- **Missing PTY features** — ensure `node-pty` compiled successfully; otherwise, the app switches to the basic stdio shell.
-- **SSH button disabled** — install the optional `ssh2` and `ssh2-sftp-client` packages as described above.
+- Electron download blocked — re‑run install with the bundled cache or use `npx electron@29 .`
+- PTY build fails — the app will run in stdio mode; Ctrl+C and force‑kill logic is adjusted automatically
+- Terminal shows no output in chat view — open DevTools and enable `window.setSmDebug(true)` to inspect sentinels/output
 
 ## Roadmap
-- Enforce trusted host fingerprints with a full known-hosts experience.
-- Add transfer drawer with upload/download for local and SSH sessions.
-- Implement a command palette (Cmd/Ctrl + K) for quick actions.
-- Build a settings surface for theme, shell, and SSH preferences.
+- SSH sessions UI (connect, known‑hosts, credentials) and SFTP integration with the transfer drawer
+- File explorer pane with path sync from active terminal (OSC‑based) and local fs operations
+- Command palette global shortcut and extended actions; richer settings (theme/font/profile)
+- Auto‑update and packaging polish
 
 ## License
 MIT © Smarterminal contributors

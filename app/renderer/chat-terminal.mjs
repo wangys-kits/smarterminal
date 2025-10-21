@@ -3,6 +3,7 @@
 import { MarkdownRenderer } from './chat-terminal-markdown.mjs';
 import { CommandSuggestions } from './chat-terminal-suggestions.mjs';
 import { CellManager } from './chat-terminal-cells.mjs';
+import { PathCompleter } from './chat-terminal-path-completer.mjs';
 
 export const INTERACTIVE_SENTINEL = '__SMRT_INTERACTIVE_DONE__';
 const COMMAND_DONE_SENTINEL_PREFIX = '__SMRT_DONE__';
@@ -35,10 +36,15 @@ export class ChatTerminal {
     this.getTabState = null;  // Function to get current tab state
     this.terminalReady = false;  // PTY is ready to accept commands
 
+    // Double Tab detection for command suggestions
+    this.lastTabTime = 0;
+    this.tabTimeout = 500; // 500ms window for double Tab
+
     // Initialize modules
     this.markdownRenderer = new MarkdownRenderer();
     this.suggestions = new CommandSuggestions();
     this.cellManager = new CellManager(this);
+    this.pathCompleter = new PathCompleter();
 
     // Expose cell manager properties for backward compatibility
     this.cellCounter = 1;
@@ -63,6 +69,9 @@ export class ChatTerminal {
     }
 
     this.commandSentinelCounter = 0;
+    // Track interactive SSH session target (best-effort)
+    this.pendingSshTarget = null; // { host, user, port }
+    this.activeSshTarget = null;  // becomes non-null once remote shell prompt is detected
 
     // Debug logging toggle: enable by running in DevTools
     //   localStorage.setItem('sm.debugTerm', '1');  // enable
@@ -93,6 +102,21 @@ export class ChatTerminal {
     if (this.debugEnabled) {
       try { console.log(this._debugPrefix(), 'debug enabled'); } catch (_) {}
     }
+  }
+
+  // Best-effort platform detection to avoid hard IPC dependency
+  async getPlatformSafe() {
+    try {
+      if (window?.sm?.app?.getPlatform) {
+        const res = await window.sm.app.getPlatform();
+        if (res?.ok && res.data) return res.data;
+      }
+    } catch (_) { /* ignore */ }
+    const ua = (typeof navigator !== 'undefined' && navigator.userAgent) ? navigator.userAgent : '';
+    if (/Windows/i.test(ua)) return 'win32';
+    if (/Mac OS X|Macintosh/i.test(ua)) return 'darwin';
+    if (/Linux|X11/i.test(ua)) return 'linux';
+    return 'linux';
   }
 
   insertSiblingCommandCell(referenceCell, position = 'after') {
@@ -201,26 +225,41 @@ export class ChatTerminal {
         e.preventDefault();
         this.navigateHistory(1);
       } else if (e.key === 'Tab') {
-        if (this.inputMode === 'code') {
-          // Tab key triggers suggestions in code mode
+        // If suggestions are visible, select highlighted item
+        if (suggestionsVisible) {
           e.preventDefault();
-          this.showSmartSuggestions();
+          this.selectHighlightedSuggestion();
+          return;
+        }
+
+        if (this.inputMode === 'code') {
+          // Tab key: smart context detection for path completion or command suggestions
+          e.preventDefault();
+          this.handleTabCompletion();
         }
       } else if (e.key === 'Escape') {
+        // If suggestions are visible, just hide them
+        if (suggestionsVisible) {
+          e.preventDefault();
+          this.hideSuggestions();
+          return;
+        }
+
+        // Otherwise clear input
         this.input.value = '';
         this.input.rows = 1;
-        // Hide command suggestions if visible
-        const suggestions = document.getElementById('commandSuggestions');
-        if (suggestions) {
-          suggestions.classList.add('hidden');
-        }
       }
     });
 
     this.input.addEventListener('focus', () => {
       if (!this.isActive) return;
       this.clearComposerSelection();
+      // Clear any selected cell when input gains focus
+      this.clearCellSelection();
     });
+
+    // Setup click outside handler for suggestions
+    this.setupSuggestionsClickOutside();
 
     if (this.inputWrapper) {
       this.inputWrapper.addEventListener('mousedown', (event) => {
@@ -235,11 +274,32 @@ export class ChatTerminal {
         this.selectComposer();
       });
     }
-    
+
     // Handle input for command suggestions
     this.input.addEventListener('input', (e) => {
       if (!this.isActive) return;
+      // Hide suggestions when input content changes
+      this.hideSuggestions();
       this.handleCommandSuggestions(e.target.value);
+    });
+  }
+
+  setupSuggestionsClickOutside() {
+    // Global click handler to hide suggestions when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!this.isActive) return;
+
+      const suggestionsEl = document.getElementById('commandSuggestions');
+      if (!suggestionsEl || suggestionsEl.classList.contains('hidden')) return;
+
+      // Check if click is inside suggestions dropdown or input
+      const clickedInsideSuggestions = suggestionsEl.contains(e.target);
+      const clickedInsideInput = this.input && this.input.contains(e.target);
+
+      // Hide suggestions if clicked outside
+      if (!clickedInsideSuggestions && !clickedInsideInput) {
+        this.hideSuggestions();
+      }
     });
   }
 
@@ -260,12 +320,153 @@ export class ChatTerminal {
         if (!this.isActive) return;
         const cell = e.target.closest('.notebook-cell');
         if (!cell) return;
+
+        // Clear composer selection and blur input to ensure mutual exclusivity
         this.clearComposerSelection();
+        if (this.input && document.activeElement === this.input) {
+          this.input.blur();
+        }
+
         this.selectCell(cell);
       });
     }
 
     window.addEventListener('keydown', this.handleGlobalKeydown);
+
+    // Paste handler: when pasting file(s) after copying from Finder/Explorer,
+    // insert their absolute paths. Trigger if looks like /upload OR the clipboard
+    // clearly contains files/URLs (prevents pasting file-icon images into editor).
+    this.input.addEventListener('paste', (e) => {
+      try {
+        const dt = e.clipboardData;
+        if (!dt) return; // no data, fall through
+
+        const types = Array.from(dt.types || []);
+        const current = (this.input?.value || '').trimStart();
+        const looksLikeUpload = current.startsWith('/upload');
+        const hasFilesType = types.includes('Files');
+        const hasUriList = types.includes('text/uri-list');
+        const hasPublicFileUrl = types.includes('public.file-url');
+        const hasFileItems = Array.from(dt.items || []).some(it => it && it.kind === 'file');
+
+        // Only intercept if user intent looks like upload OR clipboard clearly has files
+        if (!looksLikeUpload && !hasFilesType && !hasUriList && !hasPublicFileUrl && !hasFileItems) return;
+
+        const fileUrls = [];
+        if (hasUriList) {
+          const uriList = dt.getData('text/uri-list') || '';
+          // text/uri-list may contain comments starting with '#', and multiple lines
+          uriList.split(/\r?\n/).forEach(line => {
+            const s = line.trim();
+            if (!s || s.startsWith('#')) return;
+            if (/^file:\/\//i.test(s)) fileUrls.push(s);
+          });
+        }
+
+        if (hasPublicFileUrl) {
+          const s = (dt.getData('public.file-url') || '').trim();
+          if (s) fileUrls.push(s);
+        }
+
+        // Fallbacks
+        let plain = '';
+        const hasPlain = types.includes('text/plain');
+        if (!fileUrls.length && hasPlain) {
+          plain = dt.getData('text/plain') || '';
+          const trimmed = plain.trim();
+          if (/^file:\/\//i.test(trimmed)) {
+            fileUrls.push(trimmed);
+          }
+        }
+
+        const toPaths = (urls) => {
+          const out = [];
+          for (const u of urls) {
+            try {
+              const urlObj = new URL(u);
+              if (urlObj.protocol !== 'file:') continue;
+              // Decode percent-encoding; macOS/Linux paths start with '/'
+              let p = decodeURIComponent(urlObj.pathname || '');
+              // On Windows, url.pathname may start with '/C:/' — strip leading slash
+              if (/^\/[A-Za-z]:\//.test(p)) p = p.slice(1);
+              out.push(p);
+            } catch (_) {
+              // Not a valid URL. Ignore.
+            }
+          }
+          return out;
+        };
+
+        let paths = toPaths(fileUrls);
+
+        // Also check DataTransfer.files (Electron may expose .path)
+        if (!paths.length && dt.files && dt.files.length) {
+          paths = Array.from(dt.files)
+            .map(f => (f && (f.path || f.name)) ? (f.path || f.name) : '')
+            .filter(Boolean);
+        }
+
+        // As a last resort, if plain text looks like an absolute path, use it.
+        if (!paths.length && plain) {
+          const t = plain.trim();
+          const isAbsUnix = t.startsWith('/');
+          const isAbsWin = /^[A-Za-z]:[\\/]/.test(t) || t.startsWith('\\\\');
+          if (isAbsUnix || isAbsWin) paths = [t];
+        }
+
+        // If no paths yet, try IPC clipboard helper (Electron) as a last resort
+        if (!paths.length && (looksLikeUpload || hasFilesType || hasUriList || hasPublicFileUrl || hasFileItems)) {
+          try {
+            // Prevent default while we fetch asynchronously to avoid image insertion
+            e.preventDefault();
+            if (window?.sm?.clip?.getFilePaths) {
+              window.sm.clip.getFilePaths().then(res => {
+                const list = (res && res.ok && Array.isArray(res.data)) ? res.data : [];
+                if (!list.length) return;
+                const needsQuoting = (s) => /\s|["'`$&|;<>()\\]/.test(s);
+                const singleQuote = (s) => "'" + s.replace(/'/g, "'\\''") + "'";
+                const joined = list.map(p => needsQuoting(p) ? singleQuote(p) : p).join(' ');
+                const el = this.input;
+                const start = el.selectionStart ?? el.value.length;
+                const end = el.selectionEnd ?? el.value.length;
+                const before = el.value.slice(0, start);
+                const after = el.value.slice(end);
+                el.value = before + joined + after;
+                const cursor = (before + joined).length;
+                el.setSelectionRange(cursor, cursor);
+                el.dispatchEvent(new Event('input'));
+              }).catch(() => {});
+              return;
+            }
+          } catch (_) {}
+        }
+
+        if (!paths.length) return; // let default paste proceed
+
+        // We will insert our synthesized text and prevent the default paste.
+        e.preventDefault();
+
+        const needsQuoting = (s) => /\s|["'`$&|;<>()\\]/.test(s);
+        const singleQuote = (s) => "'" + s.replace(/'/g, "'\\''") + "'";
+
+        const joined = paths.map(p => needsQuoting(p) ? singleQuote(p) : p).join(' ');
+
+        // Insert at cursor position
+        const el = this.input;
+        const start = el.selectionStart ?? el.value.length;
+        const end = el.selectionEnd ?? el.value.length;
+        const before = el.value.slice(0, start);
+        const after = el.value.slice(end);
+        el.value = before + joined + after;
+        const cursor = (before + joined).length;
+        el.setSelectionRange(cursor, cursor);
+
+        // Ensure UI reacts to change
+        el.dispatchEvent(new Event('input'));
+      } catch (_) {
+        // If anything goes wrong, fall back to default paste behavior.
+      }
+    });
   }
 
   handleGlobalKeydown(e) {
@@ -411,6 +612,14 @@ export class ChatTerminal {
     // Terminal ready check removed - each tab's terminal is always ready after initialization
 
     const command = trimmedInput;
+
+    // Check if this is a file transfer command
+    const transferCommand = this.parseTransferCommand(command);
+    if (transferCommand) {
+      // Handle file transfer command
+      await this.handleTransferCommand(transferCommand);
+      return;
+    }
 
     // Add to history (code mode only)
     this.history.push(command);
@@ -620,10 +829,150 @@ export class ChatTerminal {
 
     if (!editor.__smrtEditHandlers) {
       const keyHandler = (e) => {
+        const suggestionsEl = document.getElementById('commandSuggestions');
+        const suggestionsVisible = suggestionsEl && !suggestionsEl.classList.contains('hidden');
+
         if (e.key === 'Enter' && e.shiftKey) {
           e.preventDefault();
           const newCommand = editor.textContent.trim();
           this.finishCommandEdit(cellContext, newCommand, true);
+        } else if (e.key === 'Tab') {
+          // Tab completion in cell editor
+          e.preventDefault();
+
+          // If suggestions are visible, select current item
+          if (suggestionsVisible) {
+            this.selectCurrentCellSuggestion(editor, cellContext);
+          } else {
+            this.handleCellTabCompletion(editor, cellContext);
+          }
+        } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          // Navigate suggestions if visible
+          if (suggestionsVisible) {
+            e.preventDefault();
+            this.navigateCellSuggestions(e.key === 'ArrowDown' ? 1 : -1);
+          }
+        } else if (e.key === 'Escape') {
+          // Hide suggestions if visible
+          if (suggestionsVisible) {
+            e.preventDefault();
+            this.hideSuggestions();
+          }
+        }
+      };
+
+      const inputHandler = () => {
+        // Hide suggestions when cell editor content changes
+        this.hideSuggestions();
+      };
+
+      // Paste handler for contentEditable command editor (history cell).
+      // Paste of files: insert absolute paths instead of rich content/image.
+      const pasteHandler = (e) => {
+        try {
+          const dt = e.clipboardData;
+          if (!dt) return;
+
+          const types = Array.from(dt.types || []);
+          // Trigger if upload intent or clipboard clearly has files
+          const looksLikeUpload = cellContext?.cellEl?.classList?.contains('mode-upload') ||
+            (editor.textContent || '').trimStart().startsWith('/upload');
+          const hasFilesType = types.includes('Files');
+          const hasUriList = types.includes('text/uri-list');
+          const hasPublicFileUrl = types.includes('public.file-url');
+          const hasFileItems = Array.from(dt.items || []).some(it => it && it.kind === 'file');
+          if (!looksLikeUpload && !hasFilesType && !hasUriList && !hasPublicFileUrl && !hasFileItems) return;
+
+          const fileUrls = [];
+          let plain = '';
+
+          if (hasUriList) {
+            const uriList = dt.getData('text/uri-list') || '';
+            uriList.split(/\r?\n/).forEach(line => {
+              const s = (line || '').trim();
+              if (!s || s.startsWith('#')) return;
+              if (/^file:\/\//i.test(s)) fileUrls.push(s);
+            });
+          }
+
+          if (hasPublicFileUrl) {
+            const s = (dt.getData('public.file-url') || '').trim();
+            if (s) fileUrls.push(s);
+          }
+
+          if (!fileUrls.length && types.includes('text/plain')) {
+            plain = dt.getData('text/plain') || '';
+            const t = plain.trim();
+            if (/^file:\/\//i.test(t)) fileUrls.push(t);
+          }
+
+          const toPaths = (urls) => {
+            const out = [];
+            for (const u of urls) {
+              try {
+                const urlObj = new URL(u);
+                if (urlObj.protocol !== 'file:') continue;
+                let p = decodeURIComponent(urlObj.pathname || '');
+                if (/^\/[A-Za-z]:\//.test(p)) p = p.slice(1);
+                out.push(p);
+              } catch (_) {}
+            }
+            return out;
+          };
+
+          let paths = toPaths(fileUrls);
+
+          if (!paths.length && dt.files && dt.files.length) {
+            paths = Array.from(dt.files)
+              .map(f => (f && (f.path || f.name)) ? (f.path || f.name) : '')
+              .filter(Boolean);
+          }
+
+          if (!paths.length && plain) {
+            const t = plain.trim();
+            const isAbsUnix = t.startsWith('/');
+            const isAbsWin = /^[A-Za-z]:[\\/]/.test(t) || t.startsWith('\\\\');
+            if (isAbsUnix || isAbsWin) paths = [t];
+          }
+
+          // As a last resort, ask main process clipboard
+          if (!paths.length && (looksLikeUpload || hasFilesType || hasUriList || hasPublicFileUrl || hasFileItems)) {
+            e.preventDefault();
+            if (window?.sm?.clip?.getFilePaths) {
+              window.sm.clip.getFilePaths().then(res => {
+                const list = (res && res.ok && Array.isArray(res.data)) ? res.data : [];
+                if (!list.length) return;
+                const needsQuoting = (s) => /\s|["'`$&|;<>()\\]/.test(s);
+                const singleQuote = (s) => "'" + s.replace(/'/g, "'\\''") + "'";
+                const joined = list.map(p => needsQuoting(p) ? singleQuote(p) : p).join(' ');
+                const input = editor.textContent || '';
+                const pos = this.getCursorPositionInContentEditable(editor);
+                const before = input.slice(0, pos);
+                const after = input.slice(pos);
+                editor.textContent = before + joined + after;
+                this.setCursorPositionInContentEditable(editor, (before + joined).length);
+              }).catch(() => {});
+              return;
+            }
+          }
+
+          if (!paths.length) return; // fall back to default paste
+
+          e.preventDefault();
+
+          const needsQuoting = (s) => /\s|["'`$&|;<>()\\]/.test(s);
+          const singleQuote = (s) => "'" + s.replace(/'/g, "'\\''") + "'";
+          const joined = paths.map(p => needsQuoting(p) ? singleQuote(p) : p).join(' ');
+
+          // Insert into contentEditable at caret
+          const input = editor.textContent || '';
+          const pos = this.getCursorPositionInContentEditable(editor);
+          const before = input.slice(0, pos);
+          const after = input.slice(pos);
+          editor.textContent = before + joined + after;
+          this.setCursorPositionInContentEditable(editor, (before + joined).length);
+        } catch (_) {
+          // swallow and allow default
         }
       };
 
@@ -638,8 +987,10 @@ export class ChatTerminal {
         this.selectCell(cellContext.cellEl);
       };
 
-      editor.__smrtEditHandlers = { keyHandler, blurHandler, focusHandler };
+      editor.__smrtEditHandlers = { keyHandler, inputHandler, pasteHandler, blurHandler, focusHandler };
       editor.addEventListener('keydown', keyHandler);
+      editor.addEventListener('input', inputHandler);
+      editor.addEventListener('paste', pasteHandler);
       editor.addEventListener('blur', blurHandler);
       editor.addEventListener('focus', focusHandler);
     }
@@ -679,6 +1030,21 @@ export class ChatTerminal {
 
     if (shouldRun && newCommand) {
       this.disableCommandEditing(cellContext);
+
+      // Intercept transfer commands when re-running an edited cell
+      const transferCmd = this.parseTransferCommand(newCommand);
+      if (transferCmd) {
+        // Mark mode on the existing cell and execute transfer in-place
+        cellContext.cellEl.classList.remove('mode-command', 'mode-upload', 'mode-download');
+        cellContext.cellEl.classList.add(`mode-${transferCmd.type}`);
+        if (transferCmd.type === 'upload') {
+          this.executeUploadCommand(transferCmd.sourcePath, transferCmd.targetPath, cellContext);
+        } else {
+          this.executeDownloadCommand(transferCmd.sourcePath, transferCmd.targetPath, cellContext);
+        }
+        return;
+      }
+
       this.updateCommandStats(newCommand);
       this.runShellCommand(newCommand, cellContext, { fromRerun: true });
       return;
@@ -1232,6 +1598,23 @@ export class ChatTerminal {
   }
 
   runShellCommand(command, cellContext, { fromRerun = false } = {}) {
+    // Safety: if someone calls runShellCommand with a transfer command, route it
+    const t = this.parseTransferCommand(command);
+    if (t) {
+      // When called from rerun with an existing cell, run in place; otherwise create a new cell
+      if (cellContext) {
+        cellContext.cellEl.classList.remove('mode-command', 'mode-upload', 'mode-download');
+        cellContext.cellEl.classList.add(`mode-${t.type}`);
+        if (t.type === 'upload') {
+          this.executeUploadCommand(t.sourcePath, t.targetPath, cellContext);
+        } else {
+          this.executeDownloadCommand(t.sourcePath, t.targetPath, cellContext);
+        }
+      } else {
+        this.handleTransferCommand(t);
+      }
+      return;
+    }
     if (!cellContext) {
       cellContext = this.addUserMessage(command);
     }
@@ -1310,6 +1693,12 @@ export class ChatTerminal {
       // 检测是否为交互式命令
       const isInteractiveCommand = /^\s*(ssh|telnet|nc|netcat|mysql|psql|mongo|redis-cli|python|node|irb|rails\s+console)\s+/i.test(command);
 
+      // If this is an ssh command, try to capture the target for later SCP fallback
+      if (/^\s*ssh\s+/i.test(command)) {
+        this.pendingSshTarget = this.parseSshTarget(command);
+        this.dbg('ssh pending target:', this.pendingSshTarget);
+      }
+
       // 生成 sentinel ID（用于检测命令完成）
       const sentinelId = this.createCommandSentinelId();
 
@@ -1361,6 +1750,29 @@ export class ChatTerminal {
     if (!fromRerun) {
       this.scrollToBottom();
     }
+  }
+
+  parseSshTarget(cmd) {
+    try {
+      const s = String(cmd || '');
+      // crude tokenization
+      const tokens = s.split(/\s+/).slice(1); // remove 'ssh'
+      let user = null, host = null, port = null;
+      for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        if (t === '-p' && tokens[i+1]) { port = tokens[i+1]; i++; continue; }
+        if (t.startsWith('-p') && t.length > 2) { port = t.slice(2); continue; }
+        if (!t.startsWith('-')) {
+          // first non-flag token is usually target
+          const m = t.match(/^([^@]+)@(.+)$/);
+          if (m) { user = m[1]; host = m[2]; }
+          else { host = t; }
+          break;
+        }
+      }
+      if (!host) return null;
+      return { user, host, port };
+    } catch (_) { return null; }
   }
 
   // If the terminal backend is stdio (no PTY), tweak certain commands for better UX.
@@ -1553,8 +1965,9 @@ export class ChatTerminal {
       // Check if we have a recently finalized command that might still receive output
       if (this.lastFinalizedCommand && this.lastFinalizedCommand.outputPre) {
         const timeSinceFinalize = Date.now() - (this.lastFinalizedCommand.finalizeTime || 0);
-        // Allow 500ms buffer to receive trailing output after finalization
-        if (timeSinceFinalize < 500) {
+        // Allow 5 seconds buffer to receive trailing output after finalization
+        // This handles cases where commands continue producing output after prompt detection
+        if (timeSinceFinalize < 5000) {
           this.dbg('Appending trailing output to finalized command', { bytes: data.length });
           this.lastFinalizedCommand.output += data;
           const cleanOutput = this.cleanTerminalOutput(
@@ -1562,6 +1975,15 @@ export class ChatTerminal {
             this.lastFinalizedCommand.command
           );
           this.lastFinalizedCommand.outputPre.textContent = cleanOutput;
+
+          // Update the cell context if available
+          if (this.lastFinalizedCommand.cellContext) {
+            const cellContext = this.lastFinalizedCommand.cellContext;
+            if (cellContext.outputRow) {
+              cellContext.outputRow.classList.remove('hidden');
+            }
+            this.updateControlButtonStates(cellContext);
+          }
           return;
         }
       }
@@ -1650,6 +2072,10 @@ export class ChatTerminal {
 
       if (hasSubstantialOutput && hasPrompt) {
         this.dbg('interactive command ready: output + prompt detected');
+        if (this.pendingSshTarget) {
+          this.activeSshTarget = this.pendingSshTarget;
+          this.dbg('ssh active target set:', this.activeSshTarget);
+        }
         this.finalizeCommandOutput();
         return;
       }
@@ -1897,85 +2323,418 @@ export class ChatTerminal {
     this.scrollToBottom();
   }
 
+  /**
+   * Parse transfer command (/upload or /download)
+   * @param {string} input - Command input
+   * @returns {Object|null} - Transfer command object or null
+   */
+  parseTransferCommand(input) {
+    const trimmed = input.trim();
+
+    // Check for upload command: /upload <source> [target]
+    if (trimmed.startsWith('/upload ')) {
+      const args = trimmed.slice(8).trim().split(/\s+/);
+      if (args.length === 0 || !args[0]) {
+        return null;
+      }
+      return {
+        type: 'upload',
+        sourcePath: args[0],
+        targetPath: args[1] || null
+      };
+    }
+
+    // Check for download command: /download <source> [target]
+    if (trimmed.startsWith('/download ')) {
+      const args = trimmed.slice(10).trim().split(/\s+/);
+      if (args.length === 0 || !args[0]) {
+        return null;
+      }
+      return {
+        type: 'download',
+        sourcePath: args[0],
+        targetPath: args[1] || null
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * Detect command mode based on input
+   * @param {string} commandText - Command text
+   * @returns {string} - Mode: 'command', 'markdown', 'upload', 'download'
+   */
+  detectCommandMode(commandText) {
+    const trimmed = commandText.trim();
+
+    if (trimmed.startsWith('/upload ')) return 'upload';
+    if (trimmed.startsWith('/download ')) return 'download';
+    if (trimmed.startsWith('#') || trimmed.includes('```')) return 'markdown';
+
+    return 'command';
+  }
+
+  /**
+   * Handle transfer command execution
+   * @param {Object} transferCmd - Transfer command object
+   */
+  async handleTransferCommand(transferCmd) {
+    const { type, sourcePath, targetPath } = transferCmd;
+
+    // Add to history
+    const originalCommand = type === 'upload'
+      ? `/upload ${sourcePath}${targetPath ? ' ' + targetPath : ''}`
+      : `/download ${sourcePath}${targetPath ? ' ' + targetPath : ''}`;
+
+    this.history.push(originalCommand);
+    this.historyIndex = this.history.length;
+
+    // Create cell context with transfer mode
+    const cellContext = this.addUserMessage(originalCommand, { startEditing: true });
+
+    // Mark the cell with transfer mode
+    if (cellContext && cellContext.cellEl) {
+      cellContext.cellEl.classList.add(`mode-${type}`);
+      cellContext.transferMode = type;
+    }
+
+    // Clear input
+    this.input.value = '';
+    this.input.rows = 1;
+    this.input.focus();
+
+    // Hide command suggestions
+    const suggestionsEl = document.getElementById('commandSuggestions');
+    if (suggestionsEl) {
+      suggestionsEl.classList.add('hidden');
+    }
+
+    // Execute transfer
+    try {
+      if (type === 'upload') {
+        await this.executeUploadCommand(sourcePath, targetPath, cellContext);
+      } else if (type === 'download') {
+        await this.executeDownloadCommand(sourcePath, targetPath, cellContext);
+      }
+    } catch (err) {
+      console.error(`[transfer] ${type} failed:`, err);
+      this.renderCellOutput(cellContext, `Error: ${err.message}`, { isError: true });
+    }
+  }
+
+  /**
+   * Execute upload command
+   * @param {string} sourcePath - Local source path
+   * @param {string} targetPath - Remote target path (optional)
+   * @param {Object} cellContext - Cell context
+   */
+  async executeUploadCommand(sourcePath, targetPath, cellContext) {
+    const executionIndex = this.cellCounter++;
+    this.applyExecutionIndex(cellContext, executionIndex);
+
+    // Show loading message
+    const loadingEl = this.addLoadingMessage(cellContext);
+    // Mark cell busy to align with normal command lifecycle
+    this.setCommandRunning(true, cellContext);
+
+    try {
+      // Get tab state to determine if we're connected to SSH
+      const tabState = typeof this.getTabState === 'function' ? this.getTabState() : null;
+      const mode = tabState?.mode || 'pty';
+      const cwd = tabState?.cwd || '~';
+
+      // Determine if we have an SSH context (explicit SSH tab or active interactive SSH)
+      const sshTarget = (mode === 'ssh')
+        ? (tabState?.sshTarget || this.activeSshTarget || null)
+        : (this.activeSshTarget || null);
+
+      // Determine effective target path
+      let effectiveTarget = targetPath;
+      if (!effectiveTarget) {
+        // If this is a remote upload, default to '.' (remote home)
+        // Otherwise use local cwd
+        effectiveTarget = sshTarget ? '.' : cwd;
+      }
+      if (sshTarget) {
+        // Local -> Remote via scp (best-effort until SFTP pipeline is wired)
+        this.renderCellOutput(cellContext, 'Uploading to remote server...', { isError: false });
+        try {
+          const platform = await this.getPlatformSafe();
+          const q = (p) => {
+            const s = String(p);
+            if (platform === 'win32') return `'${s.replace(/'/g, "''")}'`;
+            return `'${s.replace(/'/g, "'\\''")}'`;
+          };
+          const { user, host, port } = sshTarget;
+          const remoteSpec = `${user ? user + '@' : ''}${host}:${effectiveTarget || '.'}`;
+          const pOpt = port ? `-P ${port}` : '';
+          const scpCmd = `scp -q ${pOpt} ${q(sourcePath)} ${q(remoteSpec)}`.replace(/\s+/g, ' ').trim();
+          const commandId = `scp_${Date.now()}`;
+          const execRes = await window.sm.cmd.execute({ commandId, command: scpCmd, cwd: undefined });
+          if (!execRes?.ok) throw new Error(execRes?.error || 'EXEC_FAILED');
+          await new Promise((resolve, reject) => {
+            const onExit = (m) => {
+              if (m?.commandId !== commandId) return;
+              window.sm.cmd.onExit(() => {});
+              if (m.code === 0) resolve(0); else reject(new Error('SCP_FAILED'));
+            };
+            window.sm.cmd.onExit(onExit);
+          });
+          this.renderCellOutput(cellContext, `✓ File uploaded successfully\nSource: ${sourcePath}\nTarget: ${remoteSpec}`, { isError: false });
+        } catch (e) {
+          this.renderCellOutput(cellContext, `✗ Upload failed: ${e?.message || e}\nSource: ${sourcePath}\nTarget: ${effectiveTarget}`, { isError: true });
+        }
+      } else {
+        // Local upload: local -> local (copy)
+        this.renderCellOutput(cellContext, 'Copying file locally...', { isError: false });
+
+        let usedFallback = false;
+        try {
+          // Preferred fast path via IPC
+          const result = await window.sm.fs.copy({ sourcePath, targetPath: effectiveTarget });
+          if (result?.ok) {
+            this.renderCellOutput(cellContext, `✓ File copied successfully\nSource: ${sourcePath}\nTarget: ${result.data.targetPath}`, { isError: false });
+            return;
+          }
+          // If failed without handler, fall through to shell fallback
+          if (result?.error && String(result.error).includes("No handler registered for 'fs.copy'")) {
+            usedFallback = true;
+          } else {
+            throw new Error(result?.error || 'COPY_FAILED');
+          }
+        } catch (err) {
+          const msg = String(err?.message || err || '');
+          if (msg.includes("No handler registered for 'fs.copy'")) {
+            usedFallback = true;
+          } else if (!msg) {
+            usedFallback = true;
+          } else {
+            // Non-handler errors: still try fallback as best-effort
+            usedFallback = true;
+          }
+        }
+
+        if (usedFallback) {
+          // Fallback: copy via shell command for compatibility
+          try {
+            const platform = await this.getPlatformSafe();
+            const q = (p) => {
+              const s = String(p);
+              if (platform === 'win32') return `'${s.replace(/'/g, "''")}'`;
+              return `'${s.replace(/'/g, "'\\''")}'`;
+            };
+            let cmd;
+            if (platform === 'win32') {
+              // Use PowerShell for robust path handling
+              cmd = `powershell -NoProfile -NonInteractive -Command "Copy-Item -LiteralPath ${q(sourcePath)} -Destination ${q(effectiveTarget)} -Force"`;
+            } else {
+              // macOS/Linux
+              cmd = `cp -f ${q(sourcePath)} ${q(effectiveTarget)}`;
+            }
+            const commandId = `copy_${Date.now()}`;
+            const execRes = await window.sm.cmd.execute({ commandId, command: cmd, cwd: undefined });
+            if (!execRes?.ok) throw new Error(execRes?.error || 'EXEC_FAILED');
+            // Wait for exit event
+            await new Promise((resolve, reject) => {
+              const onExit = (m) => {
+                if (m?.commandId !== commandId) return;
+                window.sm.cmd.onExit(() => {}); // no-op detach; handler cleanup managed globally
+                if (m.code === 0) resolve(0); else reject(new Error('SHELL_COPY_FAILED'));
+              };
+              window.sm.cmd.onExit(onExit);
+            });
+            this.renderCellOutput(cellContext, `✓ File copied successfully\nSource: ${sourcePath}\nTarget: ${effectiveTarget}`, { isError: false });
+          } catch (fallbackErr) {
+            this.renderCellOutput(cellContext, `✗ Copy failed: ${fallbackErr?.message || fallbackErr}\nSource: ${sourcePath}\nTarget: ${effectiveTarget}`, { isError: true });
+          }
+        }
+      }
+    } catch (err) {
+      this.renderCellOutput(cellContext, `Upload failed: ${err.message}`, { isError: true });
+    } finally {
+      this.removeLoadingMessage(loadingEl);
+      // Ensure UI state is reset so subsequent commands can run normally
+      this.setCommandRunning(false, cellContext);
+    }
+  }
+
+  /**
+   * Execute download command
+   * @param {string} sourcePath - Remote source path
+   * @param {string} targetPath - Local target path (optional)
+   * @param {Object} cellContext - Cell context
+   */
+  async executeDownloadCommand(sourcePath, targetPath, cellContext) {
+    const executionIndex = this.cellCounter++;
+    this.applyExecutionIndex(cellContext, executionIndex);
+
+    // Show loading message
+    const loadingEl = this.addLoadingMessage(cellContext);
+    this.setCommandRunning(true, cellContext);
+
+    try {
+      // Get tab state to determine if we're connected to SSH
+      const tabState = typeof this.getTabState === 'function' ? this.getTabState() : null;
+      const mode = tabState?.mode || 'pty';
+      const cwd = tabState?.cwd || '~';
+
+      // Determine effective target path
+      let effectiveTarget = targetPath;
+      if (!effectiveTarget) {
+        // If no target specified, default to system Downloads directory
+        try {
+          const s = await window.sm.settings.get();
+          const dl = s?.ok && s.data?.downloadsDir ? s.data.downloadsDir : null;
+          effectiveTarget = dl || cwd; // fallback to cwd if not available
+        } catch (_) {
+          effectiveTarget = cwd;
+        }
+      }
+
+      const sshTarget = (mode === 'ssh') ? (tabState?.sshTarget || this.activeSshTarget || null) : (this.activeSshTarget || null);
+      if (sshTarget) {
+        // Remote -> local via scp (best-effort until SFTP pipeline is wired)
+        this.renderCellOutput(cellContext, 'Downloading from remote server...', { isError: false });
+        try {
+          const platform = await this.getPlatformSafe();
+          const q = (p) => {
+            const s = String(p);
+            if (platform === 'win32') return `'${s.replace(/'/g, "''")}'`;
+            return `'${s.replace(/'/g, "'\\''")}'`;
+          };
+          const { user, host, port } = sshTarget;
+          const remoteSpec = `${user ? user + '@' : ''}${host}:${sourcePath}`;
+          const pOpt = port ? `-P ${port}` : '';
+          const scpCmd = `scp -q ${pOpt} ${q(remoteSpec)} ${q(effectiveTarget)}`.replace(/\s+/g, ' ').trim();
+          const commandId = `scp_${Date.now()}`;
+          const execRes = await window.sm.cmd.execute({ commandId, command: scpCmd, cwd: undefined });
+          if (!execRes?.ok) throw new Error(execRes?.error || 'EXEC_FAILED');
+          await new Promise((resolve, reject) => {
+            const onExit = (m) => {
+              if (m?.commandId !== commandId) return;
+              window.sm.cmd.onExit(() => {});
+              if (m.code === 0) resolve(0); else reject(new Error('SCP_FAILED'));
+            };
+            window.sm.cmd.onExit(onExit);
+          });
+          this.renderCellOutput(cellContext, `✓ File copied successfully\nSource: ${sourcePath}\nTarget: ${effectiveTarget}`, { isError: false });
+        } catch (e) {
+          this.renderCellOutput(cellContext, `✗ Download failed: ${e?.message || e}\nSource: ${sourcePath}\nTarget: ${effectiveTarget}`, { isError: true });
+        }
+      } else {
+        // Local download: local -> local (copy)
+        this.renderCellOutput(cellContext, 'Copying file locally...', { isError: false });
+
+        let usedFallback = false;
+        try {
+          const result = await window.sm.fs.copy({ sourcePath, targetPath: effectiveTarget });
+          if (result?.ok) {
+            this.renderCellOutput(cellContext, `✓ File copied successfully\nSource: ${sourcePath}\nTarget: ${result.data.targetPath}`, { isError: false });
+            return;
+          }
+          if (result?.error && String(result.error).includes("No handler registered for 'fs.copy'")) {
+            usedFallback = true;
+          } else {
+            throw new Error(result?.error || 'COPY_FAILED');
+          }
+        } catch (err) {
+          const msg = String(err?.message || err || '');
+          if (msg.includes("No handler registered for 'fs.copy'")) {
+            usedFallback = true;
+          } else {
+            usedFallback = true; // best-effort
+          }
+        }
+
+        if (usedFallback) {
+          try {
+            const platform = await this.getPlatformSafe();
+            const q = (p) => {
+              const s = String(p);
+              if (platform === 'win32') return `'${s.replace(/'/g, "''")}'`;
+              return `'${s.replace(/'/g, "'\\''")}'`;
+            };
+            let cmd;
+            if (platform === 'win32') {
+              cmd = `powershell -NoProfile -NonInteractive -Command "Copy-Item -LiteralPath ${q(sourcePath)} -Destination ${q(effectiveTarget)} -Force"`;
+            } else {
+              cmd = `cp -f ${q(sourcePath)} ${q(effectiveTarget)}`;
+            }
+            const commandId = `copy_${Date.now()}`;
+            const execRes = await window.sm.cmd.execute({ commandId, command: cmd, cwd: undefined });
+            if (!execRes?.ok) throw new Error(execRes?.error || 'EXEC_FAILED');
+            await new Promise((resolve, reject) => {
+              const onExit = (m) => {
+                if (m?.commandId !== commandId) return;
+                window.sm.cmd.onExit(() => {});
+                if (m.code === 0) resolve(0); else reject(new Error('SHELL_COPY_FAILED'));
+              };
+              window.sm.cmd.onExit(onExit);
+            });
+            this.renderCellOutput(cellContext, `✓ File copied successfully\nSource: ${sourcePath}\nTarget: ${effectiveTarget}`, { isError: false });
+    } catch (fallbackErr) {
+      this.renderCellOutput(cellContext, `✗ Copy failed: ${fallbackErr?.message || fallbackErr}\nSource: ${sourcePath}\nTarget: ${effectiveTarget}`, { isError: true });
+    }
+      }
+    }
+  } catch (err) {
+    this.renderCellOutput(cellContext, `Download failed: ${err.message}`, { isError: true });
+  } finally {
+    this.removeLoadingMessage(loadingEl);
+    this.setCommandRunning(false, cellContext);
+  }
+  }
+
   cleanTerminalOutput(output, command) {
     let clean = output;
 
-    // Remove the command echo more carefully
-    // The command may appear with or without the leading characters we typed
-    // Try to find and remove the command echo wherever it appears at the start
-    const escapedCmd = this.escapeRegExp(command);
-
-    // Try multiple patterns for command echo removal:
-    // 1. Exact command followed by newline
-    const exactPattern = new RegExp(`^${escapedCmd}\\s*\\r?\\n`, '');
-    clean = clean.replace(exactPattern, '');
-
-    // 2. Command that may have been echoed character by character (remove duplicates)
-    // This handles cases where each character is echoed as typed
-    const charByCharPattern = new RegExp(`^[^\\n]*${escapedCmd}[^\\n]*\\r?\\n`, '');
-    if (clean === output) { // Only try this if first pattern didn't match
-      clean = clean.replace(charByCharPattern, '');
+    // Normalize newlines early so line-based regex with /m works with CR-only outputs
+    if (clean && typeof clean === 'string') {
+      clean = clean.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     }
 
-    // Strip OSC (Operating System Command) sequences such as window-title updates.
-    // These are not rendered in the chat view and only add noise (e.g. ESC ]2;... BEL).
+    // Step 1: Remove OSC (Operating System Command) sequences first
+    // These include window title updates like: ESC ]0;title BEL
     clean = clean.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '');
 
-    // Remove various ANSI escape sequences more carefully
-    // CSI sequences (Control Sequence Introducer) - keep most but remove cursor movements
-    clean = clean.replace(/\x1b\[[0-9;]*[ABCDEFGHJKSTfimnsulh]/g, '');
+    // Step 2: Remove the command echo line
+    const escapedCmd = this.escapeRegExp(command);
+    clean = clean.replace(new RegExp(`^${escapedCmd}\\s*\\n`, ''), '');
 
-    // Other escape sequences
+    // Step 3: Remove ALL ANSI escape sequences (colors, cursor movements, etc.)
+    // This must be done BEFORE trying to match prompts
+    clean = clean.replace(/\x1b\[[0-9;]*m/g, '');  // SGR (colors)
+    clean = clean.replace(/\x1b\[[0-9;]*[ABCDEFGHJKSTfimnsulh]/g, '');  // CSI
     clean = clean.replace(/\x1b[()=<>]/g, '');
     clean = clean.replace(/\x1b\[[\?#][0-9;]*[a-z]/gi, '');
     clean = clean.replace(/\x1b[PX^_][\s\S]*?\x1b\\/g, '');
 
-    // Remove remaining control characters (but be more careful)
-    // Only remove isolated control characters, not those that are part of valid sequences
+    // Step 4: Remove control characters
     clean = clean.replace(/([\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f])+/g, '');
-
-    // Remove null bytes
     clean = clean.replace(/\x00/g, '');
-
-    // Remove BEL characters
     clean = clean.replace(/\x07/g, '');
 
-    // Remove internal execution sentinels if any remain
-    const sentinelPattern = new RegExp(`${this.escapeRegExp(COMMAND_DONE_SENTINEL_PREFIX)}[A-Za-z0-9]+__\\d+__`, 'g');
-    clean = clean.replace(sentinelPattern, '');
+    // Step 5: Remove shell prompts (now without ANSI codes)
+    // Match patterns like: user@host:path# or user@host:path$
+    // After ANSI removal, prompts look like: root@OPS-4722:/opt#
+    clean = clean.replace(/^[^\n]*[@:].*?[#$%>❯»]\s*$/gm, '');
+    clean = clean.replace(/[^\n]*[@:].*?[#$%>❯»]\s*$/, '');
 
-    // Remove shell prompts at the end (more careful pattern)
-    // This matches common prompt patterns like $, #, >, %, ❯, », followed by optional spaces at the end
-    // Also handle prompts with user@host format
-    clean = clean.replace(/^.*[\$>#%❯»]\s*$/gm, ''); // Remove lines that are just prompts
-    clean = clean.replace(/[\$>#%❯»]\s*$/, ''); // Remove trailing prompt
+    // Step 6: Remove any remaining prompt-like patterns
+    clean = clean.replace(/^.*[#$%>❯»]\s*$/gm, '');
+    clean = clean.replace(/.*[#$%>❯»]\s*$/, '');
 
-    // Remove carriage returns but preserve line feeds for proper line breaks
-    clean = clean.replace(/\r\n/g, '\n'); // Convert CRLF to LF
-    clean = clean.replace(/\r/g, '');     // Remove any remaining CR
-
-    // Remove excessive blank lines (more than 2 consecutive newlines)
+    // Step 7: Clean up whitespace
     clean = clean.replace(/\n{3,}/g, '\n\n');
-
-    // Trim whitespace but preserve internal structure
     clean = clean.trim();
 
-    // If we have actual content (not just whitespace), return it
-    if (clean.length > 0) {
-      return clean;
+    // Step 8: If everything was removed but we had output, show placeholder
+    if (!clean && output && output.length > 0) {
+      return '';  // Return empty string for commands with no visible output (like cd)
     }
 
-    // If original output had content but cleaning removed it all,
-    // it likely means the command produced no visible output
-    // Check if there was any actual data
-    if (output && output.length > 10) { // If we had substantial data that got cleaned away
-      // The output might have been just control sequences and prompts
-      // Return a message indicating command executed but no output
-      return '(command executed, no output)';
-    }
-
-    // Return the cleaned output, or "(no output)" if it's truly empty
-    return clean || '(no output)';
+    return clean || '';
   }
 
   // Helper function to escape special regex characters
@@ -2267,31 +3026,9 @@ export class ChatTerminal {
       return base;
     }
 
-    // Capture the exit code from the just‑executed command exactly once and reuse it.
-    // - Use single quotes in printf payloads to avoid additional escaping by the shell.
-    // - Emit a trailing newline on the plain-text sentinel to help shells/stdio flush promptly.
-    //   (In PTY mode it's not required, but in stdio fallbacks it improves reliability.)
-    const oscSentinel = `__SMRT_EC__=$?; printf '\\033]133;D;smrt:${sentinelId};exit:%d\\007' $__SMRT_EC__`;
-    const textSentinel = `printf '${COMMAND_DONE_SENTINEL_PREFIX}${sentinelId}__%d__\\n' $__SMRT_EC__`;
-    const sentinelCommand = `${oscSentinel}; ${textSentinel}`;
-
-    if (!base) {
-      return sentinelCommand;
-    }
-
-    const trimmed = base.trimEnd();
-    const trailingWhitespace = base.slice(trimmed.length);
-    if (!trimmed) {
-      return sentinelCommand;
-    }
-
-    const endsWithSemicolon = trimmed.endsWith(';');
-    const endsWithSingleAmp = trimmed.endsWith('&') && !trimmed.endsWith('&&');
-    if (endsWithSemicolon || endsWithSingleAmp) {
-      return `${trimmed}${trailingWhitespace} ${sentinelCommand}`;
-    }
-
-    return `${base}; ${sentinelCommand}`;
+    // Don't append visible sentinels - rely on prompt detection instead
+    // Sentinel commands cause echo problems in PTY mode
+    return base;
   }
 
   stripCommandSentinel() {
@@ -2344,10 +3081,405 @@ export class ChatTerminal {
 
   updateDirectoryContext(cwd) {
     this.suggestions.updateDirectoryContext(cwd);
+    // Also update path completer's current directory
+    if (this.pathCompleter) {
+      this.pathCompleter.updateCurrentDirectory(cwd);
+    }
   }
 
   getSuggestions(input) {
     return this.suggestions.getSuggestions(input);
+  }
+
+  // ============ Tab Completion (Path + Command Suggestions) ============
+
+  /**
+   * Handle Tab key: smart context detection
+   * Single Tab: Path completion only
+   * Double Tab (within 500ms): Command suggestions
+   */
+  async handleTabCompletion() {
+    if (this.inputMode !== 'code') {
+      this.hideSuggestions();
+      return;
+    }
+
+    const now = Date.now();
+    const isDoubleTab = (now - this.lastTabTime) < this.tabTimeout;
+    this.lastTabTime = now;
+
+    // Double Tab: show command suggestions
+    if (isDoubleTab) {
+      this.showSmartSuggestions();
+      return;
+    }
+
+    // Single Tab: try path completion only
+    const input = this.input.value;
+    const cursorPos = this.input.selectionStart;
+
+    console.log('[Tab] Input:', input, 'Cursor:', cursorPos);
+
+    // 1. Detect path context
+    const pathContext = this.pathCompleter.detectPathContext(input, cursorPos);
+    console.log('[Tab] Path context:', pathContext);
+
+    if (pathContext) {
+      // 2. Try path completion
+      try {
+        const completions = await this.pathCompleter.getCompletions(pathContext);
+        console.log('[Tab] Completions:', completions.length, completions);
+
+        if (completions.length > 0) {
+          // Has matches: show path completions
+          this.renderPathCompletions(completions, pathContext);
+          return;
+        }
+        // No matches: do nothing (wait for double Tab for command suggestions)
+      } catch (err) {
+        console.warn('[ChatTerminal] Path completion failed:', err);
+        // Do nothing on error
+      }
+    }
+
+    // Single Tab with no path context: do nothing
+    // User needs to press Tab again (double Tab) to see command suggestions
+  }
+
+  /**
+   * Handle Tab completion in cell editor (history command editing)
+   * Same logic as main input: Single Tab for path, Double Tab for suggestions
+   */
+  async handleCellTabCompletion(editor, cellContext) {
+    const now = Date.now();
+    const isDoubleTab = (now - this.lastTabTime) < this.tabTimeout;
+    this.lastTabTime = now;
+
+    // Double Tab: show command suggestions
+    if (isDoubleTab) {
+      const input = editor.textContent || '';
+      const suggestions = this.getSuggestions(input);
+
+      if (suggestions.length > 0) {
+        this.renderCellSuggestions(editor, suggestions, cellContext);
+      }
+      return;
+    }
+
+    // Single Tab: try path completion
+    const input = editor.textContent || '';
+    const cursorPos = this.getCursorPositionInContentEditable(editor);
+
+    // Detect path context
+    const pathContext = this.pathCompleter.detectPathContext(input, cursorPos);
+
+    if (pathContext) {
+      try {
+        const completions = await this.pathCompleter.getCompletions(pathContext);
+
+        if (completions.length > 0) {
+          this.renderCellPathCompletions(editor, completions, pathContext, cellContext);
+          return;
+        }
+      } catch (err) {
+        console.warn('[ChatTerminal] Cell path completion failed:', err);
+      }
+    }
+  }
+
+  /**
+   * Get cursor position in contentEditable element
+   */
+  getCursorPositionInContentEditable(element) {
+    let caretPos = 0;
+    const sel = window.getSelection();
+
+    if (sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0);
+      const preCaretRange = range.cloneRange();
+      preCaretRange.selectNodeContents(element);
+      preCaretRange.setEnd(range.endContainer, range.endOffset);
+      caretPos = preCaretRange.toString().length;
+    }
+
+    return caretPos;
+  }
+
+  /**
+   * Set cursor position in contentEditable element
+   */
+  setCursorPositionInContentEditable(element, position) {
+    const range = document.createRange();
+    const sel = window.getSelection();
+
+    let currentPos = 0;
+    let found = false;
+
+    const walk = (node) => {
+      if (found) return;
+
+      if (node.nodeType === Node.TEXT_NODE) {
+        const length = node.textContent.length;
+        if (currentPos + length >= position) {
+          range.setStart(node, position - currentPos);
+          range.collapse(true);
+          found = true;
+          return;
+        }
+        currentPos += length;
+      } else {
+        for (let i = 0; i < node.childNodes.length; i++) {
+          walk(node.childNodes[i]);
+          if (found) return;
+        }
+      }
+    };
+
+    walk(element);
+
+    if (found) {
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }
+
+  /**
+   * Render path completions for cell editor
+   */
+  renderCellPathCompletions(editor, completions, pathContext, cellContext) {
+    const suggestionsEl = document.getElementById('commandSuggestions');
+    const suggestionsList = document.getElementById('suggestionsList');
+
+    if (!suggestionsEl || !suggestionsList) return;
+
+    suggestionsEl.classList.remove('position-above', 'position-below');
+    suggestionsList.innerHTML = '';
+
+    // Add path completion items
+    completions.forEach((entry, index) => {
+      const item = document.createElement('div');
+      item.className = 'suggestion-item path-completion';
+      if (index === 0) item.classList.add('selected');
+
+      const icon = this.pathCompleter.getIcon(entry);
+      const size = entry.type === 'file' ? this.pathCompleter.formatSize(entry.size) : '';
+
+      item.innerHTML = `
+        <div class="suggestion-content">
+          <div class="suggestion-command">
+            <span class="path-icon">${icon}</span>
+            ${this.escapeHtml(entry.name)}${entry.type === 'dir' ? '/' : ''}
+          </div>
+          ${size ? `<div class="suggestion-description">${size}</div>` : ''}
+        </div>
+      `;
+
+      // Click handler
+      item.addEventListener('click', () => {
+        this.applyCellPathCompletion(editor, pathContext, entry);
+      });
+
+      suggestionsList.appendChild(item);
+    });
+
+    // Show dropdown
+    suggestionsEl.style.visibility = 'hidden';
+    suggestionsEl.classList.remove('hidden');
+    this.positionCellSuggestionsDropdown(editor);
+    suggestionsEl.style.visibility = '';
+  }
+
+  /**
+   * Apply path completion to cell editor
+   */
+  applyCellPathCompletion(editor, pathContext, entry) {
+    const input = editor.textContent || '';
+    const cursorPos = this.getCursorPositionInContentEditable(editor);
+
+    const result = this.pathCompleter.applyCompletion(
+      input,
+      cursorPos,
+      pathContext,
+      entry
+    );
+
+    editor.textContent = result.value;
+    this.setCursorPositionInContentEditable(editor, result.cursorPos);
+    editor.focus();
+
+    // Hide suggestions
+    this.hideSuggestions();
+  }
+
+  /**
+   * Render command suggestions for cell editor
+   */
+  renderCellSuggestions(editor, suggestions, cellContext) {
+    const suggestionsEl = document.getElementById('commandSuggestions');
+    const suggestionsList = document.getElementById('suggestionsList');
+
+    if (!suggestionsEl || !suggestionsList) return;
+
+    suggestionsEl.classList.remove('position-above', 'position-below');
+    suggestionsList.innerHTML = '';
+
+    suggestions.forEach((suggestion, index) => {
+      const item = document.createElement('div');
+      item.className = 'suggestion-item';
+      if (index === 0) item.classList.add('selected');
+
+      item.innerHTML = `
+        <span class="suggestion-icon">${suggestion.icon || '⏱️'}</span>
+        <div class="suggestion-content">
+          <div class="suggestion-command">${this.escapeHtml(suggestion.command)}</div>
+          ${suggestion.description ? `<div class="suggestion-description">${this.escapeHtml(suggestion.description)}</div>` : ''}
+        </div>
+        ${suggestion.stars ? `<div class="suggestion-meta"><span class="suggestion-stars">${suggestion.stars}</span></div>` : ''}
+      `;
+
+      // Click handler
+      item.addEventListener('click', () => {
+        editor.textContent = suggestion.command;
+        this.setCursorPositionInContentEditable(editor, suggestion.command.length);
+        editor.focus();
+        this.hideSuggestions();
+      });
+
+      suggestionsList.appendChild(item);
+    });
+
+    // Show dropdown
+    suggestionsEl.style.visibility = 'hidden';
+    suggestionsEl.classList.remove('hidden');
+    this.positionCellSuggestionsDropdown(editor);
+    suggestionsEl.style.visibility = '';
+  }
+
+  /**
+   * Position suggestions dropdown relative to cell editor
+   * Smart positioning: place below if space available, otherwise above
+   */
+  positionCellSuggestionsDropdown(editor) {
+    const suggestionsEl = document.getElementById('commandSuggestions');
+    if (!suggestionsEl || suggestionsEl.classList.contains('hidden')) return;
+    if (!editor) return;
+
+    const margin = 12;
+    const editorRect = editor.getBoundingClientRect();
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    const spaceBelow = Math.max(0, viewportHeight - editorRect.bottom - margin);
+    const spaceAbove = Math.max(0, editorRect.top - margin);
+
+    // Reset max height to measure natural height
+    suggestionsEl.style.maxHeight = '';
+    const suggestionHeight = suggestionsEl.offsetHeight || 0;
+
+    // Decide placement: prefer below, but use above if more space there
+    let placeBelow = spaceBelow >= suggestionHeight || spaceBelow >= spaceAbove;
+    if (spaceBelow === 0 && spaceAbove === 0) {
+      placeBelow = true;
+    }
+
+    const availableSpace = placeBelow ? spaceBelow : spaceAbove;
+    const fallbackMaxHeight = 240;
+    const maxHeight = availableSpace > 0
+      ? Math.max(120, Math.floor(availableSpace))
+      : fallbackMaxHeight;
+    suggestionsEl.style.maxHeight = `${maxHeight}px`;
+
+    // Apply positioning classes
+    suggestionsEl.classList.remove('position-above', 'position-below');
+    if (placeBelow) {
+      suggestionsEl.classList.add('position-below');
+    } else {
+      suggestionsEl.classList.add('position-above');
+    }
+
+    // Position relative to viewport (fixed positioning)
+    const left = editorRect.left;
+    const width = editorRect.width;
+
+    suggestionsEl.style.left = `${left}px`;
+    suggestionsEl.style.width = `${Math.max(300, width)}px`;
+    suggestionsEl.style.right = 'auto'; // Clear right positioning
+
+    if (placeBelow) {
+      const top = editorRect.bottom + 4;
+      suggestionsEl.style.top = `${top}px`;
+      suggestionsEl.style.bottom = 'auto';
+    } else {
+      const bottom = viewportHeight - editorRect.top + 4;
+      suggestionsEl.style.bottom = `${bottom}px`;
+      suggestionsEl.style.top = 'auto';
+    }
+  }
+
+  /**
+   * Render path completions in dropdown
+   */
+  renderPathCompletions(completions, pathContext) {
+    const suggestionsEl = document.getElementById('commandSuggestions');
+    const suggestionsList = document.getElementById('suggestionsList');
+
+    if (!suggestionsEl || !suggestionsList) return;
+
+    suggestionsEl.classList.remove('position-above', 'position-below');
+    suggestionsList.innerHTML = '';
+
+    // Add path completion items
+    completions.forEach((entry, index) => {
+      const item = document.createElement('div');
+      item.className = 'suggestion-item path-completion';
+      if (index === 0) item.classList.add('selected');
+
+      const icon = this.pathCompleter.getIcon(entry);
+      const size = entry.type === 'file' ? this.pathCompleter.formatSize(entry.size) : '';
+
+      item.innerHTML = `
+        <div class="suggestion-content">
+          <div class="suggestion-command">
+            <span class="path-icon">${icon}</span>
+            ${this.escapeHtml(entry.name)}${entry.type === 'dir' ? '/' : ''}
+          </div>
+          ${size ? `<div class="suggestion-description">${size}</div>` : ''}
+        </div>
+      `;
+
+      // Click handler
+      item.addEventListener('click', () => {
+        this.applyPathCompletion(pathContext, entry);
+      });
+
+      suggestionsList.appendChild(item);
+    });
+
+    // Show dropdown
+    suggestionsEl.style.visibility = 'hidden';
+    suggestionsEl.classList.remove('hidden');
+    this.positionSuggestionsDropdown();
+    suggestionsEl.style.visibility = '';
+  }
+
+  /**
+   * Apply path completion to input
+   */
+  applyPathCompletion(pathContext, entry) {
+    const result = this.pathCompleter.applyCompletion(
+      this.input.value,
+      this.input.selectionStart,
+      pathContext,
+      entry
+    );
+
+    this.input.value = result.value;
+    this.input.setSelectionRange(result.cursorPos, result.cursorPos);
+    this.input.focus();
+
+    // Hide suggestions
+    this.hideSuggestions();
+
+    // Trigger resize
+    this.input.dispatchEvent(new Event('input'));
   }
 
   // Show smart suggestions in a dropdown
@@ -2373,33 +3505,27 @@ export class ChatTerminal {
     if (!suggestionsEl || suggestionsEl.classList.contains('hidden')) return;
     if (!this.input) return;
 
-    const margin = 12;
     const inputRect = this.input.getBoundingClientRect();
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-    const spaceBelow = Math.max(0, viewportHeight - inputRect.bottom - margin);
-    const spaceAbove = Math.max(0, inputRect.top - margin);
 
-    suggestionsEl.style.maxHeight = '';
-    const suggestionHeight = suggestionsEl.offsetHeight || 0;
+    // Position directly below input, matching its width
+    const left = inputRect.left;
+    const top = inputRect.bottom + 4;
+    const width = inputRect.width;
 
-    let placeBelow = spaceBelow >= suggestionHeight || spaceBelow >= spaceAbove;
-    if (spaceBelow === 0 && spaceAbove === 0) {
-      placeBelow = true;
-    }
+    suggestionsEl.style.left = `${left}px`;
+    suggestionsEl.style.top = `${top}px`;
+    suggestionsEl.style.width = `${width}px`;
+    suggestionsEl.style.bottom = 'auto';
+    suggestionsEl.style.right = 'auto';
 
-    const availableSpace = placeBelow ? spaceBelow : spaceAbove;
-    const fallbackMaxHeight = 240;
-    const maxHeight = availableSpace > 0
-      ? Math.max(120, Math.floor(availableSpace))
-      : fallbackMaxHeight;
+    // Calculate max height based on available space
+    const spaceBelow = Math.max(0, viewportHeight - inputRect.bottom - 16);
+    const maxHeight = Math.min(400, Math.max(120, spaceBelow));
     suggestionsEl.style.maxHeight = `${maxHeight}px`;
 
     suggestionsEl.classList.remove('position-above', 'position-below');
-    if (placeBelow) {
-      suggestionsEl.classList.add('position-below');
-    } else {
-      suggestionsEl.classList.add('position-above');
-    }
+    suggestionsEl.classList.add('position-below');
   }
 
   // Render suggestions dropdown
@@ -2473,6 +3599,60 @@ export class ChatTerminal {
       suggestionsEl.classList.remove('position-above', 'position-below');
       suggestionsEl.style.maxHeight = '';
       suggestionsEl.style.visibility = '';
+    }
+  }
+
+  // Navigate cell suggestions (for cell editor)
+  navigateCellSuggestions(direction) {
+    const suggestionsList = document.getElementById('suggestionsList');
+    if (!suggestionsList) return;
+
+    const suggestionItems = suggestionsList.querySelectorAll('.suggestion-item');
+    if (suggestionItems.length === 0) return;
+
+    // Find currently highlighted item
+    let currentIndex = -1;
+    for (let i = 0; i < suggestionItems.length; i++) {
+      if (suggestionItems[i].classList.contains('selected')) {
+        currentIndex = i;
+        suggestionItems[i].classList.remove('selected');
+        break;
+      }
+    }
+
+    // Calculate new index
+    let newIndex = currentIndex + direction;
+
+    // Handle wrapping
+    if (newIndex < 0) {
+      newIndex = suggestionItems.length - 1; // Wrap to last item
+    } else if (newIndex >= suggestionItems.length) {
+      newIndex = 0; // Wrap to first item
+    }
+
+    // Highlight new item
+    if (suggestionItems[newIndex]) {
+      suggestionItems[newIndex].classList.add('selected');
+      // Scroll to ensure the selected item is visible
+      suggestionItems[newIndex].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }
+
+  // Select current cell suggestion (for cell editor)
+  selectCurrentCellSuggestion(editor, cellContext) {
+    const suggestionsList = document.getElementById('suggestionsList');
+    if (!suggestionsList) return;
+
+    const selectedSuggestion = suggestionsList.querySelector('.suggestion-item.selected');
+    if (selectedSuggestion) {
+      // Trigger click event on the selected suggestion
+      selectedSuggestion.click();
+    } else {
+      // If no suggestion is highlighted, select the first one
+      const firstSuggestion = suggestionsList.querySelector('.suggestion-item');
+      if (firstSuggestion) {
+        firstSuggestion.click();
+      }
     }
   }
 

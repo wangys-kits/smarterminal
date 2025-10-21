@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" aria-label="Smarter Terminal — minimal intelligent prompt mark">
+  <defs>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00E5FF"/>
+      <stop offset="100%" stop-color="#0077FF"/>
+    </linearGradient>
+  </defs>
+  <!-- Outer rounded frame echoing a terminal window; keep outline-only for versatility -->
+  <rect x="80" y="80" width="864" height="864" rx="160" fill="none" stroke="url(#accent)" stroke-width="36"/>
+  <!-- Intelligent prompt: caret and cursor underscore -->
+  <path d="M360 328 L572 512 L360 696" fill="none" stroke="url(#accent)" stroke-width="56" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="612" y="616" width="176" height="36" rx="18" fill="url(#accent)"/>
+</svg>

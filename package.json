@@ -1,7 +1,7 @@
 {
   "name": "smarterminal",
   "version": "0.1.0",
-  "description": "Smarterminal — Modern cross-platform terminal + file manager (Electron)",
+  "description": "SmartTerminal — Modern cross-platform intelligent terminal + file manager (Electron)",
   "main": "app/main.js",
   "author": "",
   "license": "MIT",
@@ -13,26 +13,29 @@
   },
   "dependencies": {
     "electron-store": "^8.2.0",
+    "node-pty": "^1.0.0",
+    "tree-kill": "^1.2.2",
     "xterm": "^5.3.0"
   },
   "optionalDependencies": {
-    "node-pty": "^1.0.0",
     "ssh2": "^1.15.0"
   },
   "devDependencies": {
     "electron": "^29.4.6",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "electron-rebuild": "^3.2.9"
   },
   "build": {
-    "appId": "com.smarterminal.app",
-    "productName": "Smarterminal",
+    "appId": "com.smartterminal.app",
+    "productName": "SmartTerminal",
     "files": [
       "app/**/*",
       "design-system/**/*",
       "docs/ui-ux-modern/xterm-theme.json"
     ],
     "mac": {
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns"
     },
     "win": {
       "target": [
@@ -46,7 +49,8 @@
         "deb",
         "rpm"
       ],
-      "category": "Development"
+      "category": "Development",
+      "icon": "build/icons"
     }
   }
 }

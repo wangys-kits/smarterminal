@@ -41,6 +41,21 @@ export class CellManager {
     }
   }
 
+  /**
+   * Detect command mode based on command text
+   * @param {string} commandText - Command text
+   * @returns {string} - Mode: 'command', 'markdown', 'upload', 'download'
+   */
+  detectCommandMode(commandText) {
+    const trimmed = commandText.trim();
+
+    if (trimmed.startsWith('/upload ')) return 'upload';
+    if (trimmed.startsWith('/download ')) return 'download';
+    if (trimmed.startsWith('#') || trimmed.includes('```')) return 'markdown';
+
+    return 'command';
+  }
+
   createCommandCell(command, options = {}) {
     const {
       insertBefore = null,
@@ -50,11 +65,18 @@ export class CellManager {
     } = options || {};
 
     const normalizedCommand = typeof command === 'string' ? command : '';
+
+    // Detect command mode
+    const mode = this.detectCommandMode(normalizedCommand);
+
     const cellEl = document.createElement('div');
     cellEl.className = 'notebook-cell';
     const cellId = this.cellIdCounter++;
     cellEl.dataset.cellId = cellId;
     cellEl.dataset.executionIndex = '';
+
+    // Add mode class to cell
+    cellEl.classList.add(`mode-${mode}`);
 
     const inputRow = document.createElement('div');
     inputRow.className = 'cell-row cell-input';
@@ -110,6 +132,8 @@ export class CellManager {
     outputContent.append(outputBody, outputTimer);
     outputRow.append(outputPrompt, outputContent);
 
+    // Build control row (Stop / Copy). We always create it and use CSS to hide in
+    // upload/download modes, so that switching modes later will automatically show/hide.
     const controlRow = document.createElement('div');
     controlRow.className = 'cell-row cell-controls';
 
@@ -140,6 +164,7 @@ export class CellManager {
     controlContent.append(stopBtn, copyBtn);
     controlRow.append(controlPrompt, controlContent);
 
+    // Append rows; controlRow will be hidden via CSS for upload/download modes
     cellEl.append(inputRow, outputRow, controlRow);
 
     cellContext.outputRow = outputRow;
@@ -176,6 +201,10 @@ export class CellManager {
 
     const cellEl = document.createElement('div');
     cellEl.className = 'notebook-cell markdown-cell';
+
+    // Add markdown mode class
+    cellEl.classList.add('mode-markdown');
+
     const cellId = this.cellIdCounter++;
     cellEl.dataset.cellId = cellId;
     cellEl.dataset.executionIndex = '';

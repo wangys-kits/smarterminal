@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 480" aria-label="SmartTerminal — lockup horizontal">
+  <defs>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00E5FF"/>
+      <stop offset="100%" stop-color="#0077FF"/>
+    </linearGradient>
+  </defs>
+  <!-- Symbol -->
+  <g transform="translate(64,64)">
+    <rect x="0" y="0" width="352" height="352" rx="80" fill="none" stroke="url(#accent)" stroke-width="16"/>
+    <path d="M120 80 L240 176 L120 272" fill="none" stroke="url(#accent)" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="260" y="220" width="84" height="20" rx="10" fill="url(#accent)"/>
+  </g>
+  <!-- Wordmark -->
+  <g transform="translate(480,112)">
+    <text x="0" y="120" font-family="-apple-system, SF Pro Display, Segoe UI, Roboto, Inter, Helvetica, Arial, sans-serif" font-size="148" font-weight="600" fill="#0A0B0D">Smart</text>
+    <text x="470" y="120" font-family="-apple-system, SF Pro Display, Segoe UI, Roboto, Inter, Helvetica, Arial, sans-serif" font-size="148" font-weight="600" fill="url(#accent)">Terminal</text>
+    <text x="0" y="196" font-family="-apple-system, SF Pro Text, Segoe UI, Roboto, Inter, Helvetica, Arial, sans-serif" font-size="28" fill="#5A6B7A" letter-spacing="2">INTELLIGENT CONSOLE</text>
+  </g>
+</svg>

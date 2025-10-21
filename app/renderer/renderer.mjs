@@ -33,20 +33,14 @@ const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
 const commandInput = document.getElementById('commandInput');
 const commandInputWrapper = document.querySelector('.command-input-wrapper');
 const chatContextMenu = document.getElementById('chatContextMenu');
+const tabContextMenu = document.getElementById('tabContextMenu');
 const txCloseBtn = document.getElementById('txCloseBtn');
 const homeView = document.getElementById('homeView');
 const workspaceView = document.getElementById('split');
 const appTitle = document.querySelector('.app-title');
 const homeFavoritesList = document.getElementById('homeFavoritesList');
 const homeFavoritesEmpty = document.getElementById('homeFavoritesEmpty');
-const homeAllList = document.getElementById('homeAllList');
-const homeAllEmpty = document.getElementById('homeAllEmpty');
 const homeFavoritesIndicators = document.getElementById('homeFavoritesIndicators');
-const homeAllIndicators = document.getElementById('homeAllIndicators');
-const homeRecycleList = document.getElementById('homeRecycleList');
-const homeRecycleEmpty = document.getElementById('homeRecycleEmpty');
-const homeRecycleClearBtn = document.getElementById('homeRecycleClear');
-const homeRecycleIndicators = document.getElementById('homeRecycleIndicators');
 const homeNewTabButtons = document.querySelectorAll('[data-action="new-tab"]');
 const homeScrollButtons = document.querySelectorAll('[data-scroll-target]');
 const confirmModal = document.getElementById('confirmModal');
@@ -54,6 +48,29 @@ const confirmModalTitle = document.getElementById('confirmModalTitle');
 const confirmModalMessage = document.getElementById('confirmModalMessage');
 const confirmModalCancel = document.getElementById('confirmModalCancel');
 const confirmModalOk = document.getElementById('confirmModalOk');
+
+// New page views
+const allConversationsView = document.getElementById('allConversationsView');
+const allConversationsList = document.getElementById('allConversationsList');
+const allConversationsEmpty = document.getElementById('allConversationsEmpty');
+const allConversationsIndicators = document.getElementById('allConversationsIndicators');
+const allConversationsBackBtn = document.getElementById('allConversationsBackBtn');
+const homeAllConversationsBtn = document.getElementById('homeAllConversationsBtn');
+
+const recycleBinView = document.getElementById('recycleBinView');
+const recycleBinList = document.getElementById('recycleBinList');
+const recycleBinEmpty = document.getElementById('recycleBinEmpty');
+const recycleBinIndicators = document.getElementById('recycleBinIndicators');
+const recycleBinClearBtn = document.getElementById('recycleBinClear');
+const recycleBinBackBtn = document.getElementById('recycleBinBackBtn');
+const homeRecycleBinBtn = document.getElementById('homeRecycleBinBtn');
+
+// Search elements
+const allConversationsSearch = document.getElementById('allConversationsSearch');
+const allConversationsClearSearch = document.getElementById('allConversationsClearSearch');
+const allConversationsSearchStatus = document.getElementById('allConversationsSearchStatus');
+const allConversationsNoResults = document.getElementById('allConversationsNoResults');
+const allConversationsLoading = document.getElementById('allConversationsLoading');
 
 function getDefaultTabTitle() {
   return i18n.t('tab.untitled', '未命名');
@@ -151,8 +168,9 @@ homeScrollButtons.forEach((button) => {
   });
 });
 
-if (homeRecycleClearBtn) {
-  homeRecycleClearBtn.addEventListener('click', async () => {
+
+if (recycleBinClearBtn) {
+  recycleBinClearBtn.addEventListener('click', async () => {
     const confirmed = await requestConfirmation({
       title: i18n.t('home.recycle.confirmTitle', '清空回收站'),
       message: i18n.t('home.recycle.confirmMessage', '确定要清空回收站吗？此操作无法撤销。'),
@@ -166,12 +184,68 @@ if (homeRecycleClearBtn) {
         await sm.tabs.remove({ fileName: item.fileName });
       }
       state.savedTabs = state.savedTabs.filter(tab => !tab.deleted);
-      pagination.recycle = 0;
-      renderHome();
+      pagination['recycle-page'] = 0;
+      renderAllConversationsPage();
+      renderRecycleBinPage();
       scheduleScrollUpdate();
     } catch (err) {
       console.error('[recycle] Failed to clear recycle bin:', err);
       alert('清空回收站失败：' + (err?.message || err));
+    }
+  });
+}
+
+if (homeAllConversationsBtn) {
+  homeAllConversationsBtn.addEventListener('click', () => {
+    showAllConversationsPage();
+  });
+}
+
+if (homeRecycleBinBtn) {
+  homeRecycleBinBtn.addEventListener('click', () => {
+    showRecycleBinPage();
+  });
+}
+
+if (allConversationsBackBtn) {
+  allConversationsBackBtn.addEventListener('click', () => {
+    hideAllConversationsPage();
+  });
+}
+
+if (recycleBinBackBtn) {
+  recycleBinBackBtn.addEventListener('click', () => {
+    hideRecycleBinPage();
+  });
+}
+
+// Search event handlers
+if (allConversationsSearch) {
+  // Handle Enter key to trigger search
+  allConversationsSearch.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      const query = allConversationsSearch.value;
+      performSearch(query);
+    }
+  });
+
+  // Show/hide clear button based on input
+  allConversationsSearch.addEventListener('input', () => {
+    const hasValue = allConversationsSearch.value.length > 0;
+    if (allConversationsClearSearch) {
+      allConversationsClearSearch.classList.toggle('hidden', !hasValue);
+    }
+  });
+}
+
+if (allConversationsClearSearch) {
+  allConversationsClearSearch.addEventListener('click', () => {
+    if (allConversationsSearch) {
+      allConversationsSearch.value = '';
+      allConversationsClearSearch.classList.add('hidden');
+      performSearch('');
+      allConversationsSearch.focus();
     }
   });
 }
@@ -274,23 +348,23 @@ const HOME_SWIPE_THRESHOLD = 30;
 const HOME_PAGE_COOLDOWN = 420;
 const pagination = {
   favorites: 0,
-  all: 0,
-  recycle: 0
+  'all-page': 0,
+  'recycle-page': 0
 };
 const pagerIndicators = {
   favorites: homeFavoritesIndicators,
-  all: homeAllIndicators,
-  recycle: homeRecycleIndicators
+  'all-page': allConversationsIndicators,
+  'recycle-page': recycleBinIndicators
 };
 const pagerSwipeTargets = {
   favorites: homeFavoritesList,
-  all: homeAllList,
-  recycle: homeRecycleList
+  'all-page': allConversationsList,
+  'recycle-page': recycleBinList
 };
 const pageChangeTimestamps = {
   favorites: 0,
-  all: 0,
-  recycle: 0
+  'all-page': 0,
+  'recycle-page': 0
 };
 const HOME_ICONS = {
   favoriteFilled: '<svg class="home-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>',
@@ -321,8 +395,8 @@ function setFavoriteIndicatorVisual(element, isFavorite) {
 }
 
 attachPagerSwipe(pagerSwipeTargets.favorites, 'favorites');
-attachPagerSwipe(pagerSwipeTargets.all, 'all');
-attachPagerSwipe(pagerSwipeTargets.recycle, 'recycle');
+attachPagerSwipe(pagerSwipeTargets['all-page'], 'all-page');
+attachPagerSwipe(pagerSwipeTargets['recycle-page'], 'recycle-page');
 
 async function requestConfirmation(options = {}) {
   const message = typeof options.message === 'string'
@@ -532,9 +606,9 @@ function getItemsForKey(key) {
   switch (key) {
     case 'favorites':
       return saved.filter(tab => !tab.deleted && tab.favorite);
-    case 'all':
+    case 'all-page':
       return saved.filter(tab => !tab.deleted);
-    case 'recycle':
+    case 'recycle-page':
       return saved.filter(tab => tab.deleted);
     default:
       return [];
@@ -816,6 +890,18 @@ function showHome(options = {}) {
     workspaceView.classList.add('hidden');
   }
 
+  // Close all other views when showing home
+  if (allConversationsView) {
+    allConversationsView.classList.add('hidden');
+  }
+  if (recycleBinView) {
+    recycleBinView.classList.add('hidden');
+  }
+  const settingsView = document.getElementById('settingsView');
+  if (settingsView) {
+    settingsView.classList.add('hidden');
+  }
+
   if (persistSession) {
     sessionState.activeTab = null;
     scheduleSessionSave();
@@ -841,7 +927,19 @@ function hideHome() {
   if (homeView) {
     homeView.classList.add('hidden');
   }
-  if (homeView && workspaceView) {
+  // Hide other views when hiding home
+  if (allConversationsView) {
+    allConversationsView.classList.add('hidden');
+  }
+  if (recycleBinView) {
+    recycleBinView.classList.add('hidden');
+  }
+  const settingsView = document.getElementById('settingsView');
+  if (settingsView) {
+    settingsView.classList.add('hidden');
+  }
+  // Show workspace when hiding home (for tab display)
+  if (workspaceView) {
     workspaceView.classList.remove('hidden');
   }
   if (appTitle) {
@@ -1106,27 +1204,409 @@ function renderHome() {
   if (!homeView) return;
 
   const favorites = getItemsForKey('favorites');
-  const all = getItemsForKey('all');
-  const trashTabs = getItemsForKey('recycle');
 
   populateHomeList(homeFavoritesList, favorites, { allowDelete: false, pageKey: 'favorites' });
-  populateHomeList(homeAllList, all, { allowDelete: true, pageKey: 'all' });
-  populateRecycleList(homeRecycleList, trashTabs);
 
   if (homeFavoritesEmpty) {
     homeFavoritesEmpty.classList.toggle('hidden', favorites.length > 0);
   }
-  if (homeAllEmpty) {
-    homeAllEmpty.classList.toggle('hidden', all.length > 0);
+
+  scheduleScrollUpdate();
+}
+
+// Search state for all conversations page
+let searchState = {
+  query: '',
+  results: [],
+  displayedCount: 0,
+  pageSize: 10,
+  isSearching: false,
+  hasMore: false
+};
+
+function renderAllConversationsPage() {
+  if (!allConversationsView) return;
+
+  // If there's an active search, render search results
+  if (searchState.query) {
+    renderSearchResults();
+    return;
   }
-  if (homeRecycleEmpty) {
-    homeRecycleEmpty.classList.toggle('hidden', trashTabs.length > 0);
+
+  // Reset pagination to page 0 when rendering all conversations
+  pagination['all-page'] = 0;
+
+  // Otherwise render all conversations (first page only)
+  const all = getItemsForKey('all-page');
+  const sorted = sortTabsForDisplay(all);
+  const pageItems = sorted.slice(0, HOME_PAGE_SIZE);
+
+  allConversationsList.innerHTML = '';
+  for (const meta of pageItems) {
+    allConversationsList.appendChild(createHomeCard(meta, { allowDelete: true }));
   }
-  if (homeRecycleClearBtn) {
-    homeRecycleClearBtn.disabled = trashTabs.length === 0;
+
+  if (allConversationsEmpty) {
+    allConversationsEmpty.classList.toggle('hidden', all.length > 0);
+  }
+  if (allConversationsNoResults) {
+    allConversationsNoResults.classList.add('hidden');
   }
 
   scheduleScrollUpdate();
+}
+
+function renderAllConversationsPageWithoutReset() {
+  if (!allConversationsView) return;
+
+  // If there's an active search, render search results
+  if (searchState.query) {
+    renderSearchResults();
+    return;
+  }
+
+  // Keep current pagination state
+  const currentPage = pagination['all-page'];
+  const all = getItemsForKey('all-page');
+  const sorted = sortTabsForDisplay(all);
+
+  // Calculate how many items to show based on current page
+  const itemsToShow = (currentPage + 1) * HOME_PAGE_SIZE;
+  const pageItems = sorted.slice(0, itemsToShow);
+
+  allConversationsList.innerHTML = '';
+  for (const meta of pageItems) {
+    allConversationsList.appendChild(createHomeCard(meta, { allowDelete: true }));
+  }
+
+  if (allConversationsEmpty) {
+    allConversationsEmpty.classList.toggle('hidden', all.length > 0);
+  }
+  if (allConversationsNoResults) {
+    allConversationsNoResults.classList.add('hidden');
+  }
+
+  scheduleScrollUpdate();
+
+  // Auto-load more if needed to fill viewport
+  const settingsContent = allConversationsView;
+  if (settingsContent) {
+    autoLoadUntilScroll(settingsContent);
+  }
+}
+
+function renderSearchResults() {
+  if (!allConversationsList) return;
+
+  const itemsToShow = searchState.results.slice(0, searchState.displayedCount);
+
+  // Clear and populate list
+  allConversationsList.innerHTML = '';
+  for (const meta of itemsToShow) {
+    allConversationsList.appendChild(createHomeCard(meta, { allowDelete: true }));
+  }
+
+  // Update UI states
+  if (allConversationsEmpty) {
+    allConversationsEmpty.classList.add('hidden');
+  }
+  if (allConversationsNoResults) {
+    allConversationsNoResults.classList.toggle('hidden', searchState.results.length > 0);
+  }
+  if (allConversationsLoading) {
+    allConversationsLoading.classList.toggle('hidden', !searchState.hasMore);
+  }
+
+  scheduleScrollUpdate();
+}
+
+async function performSearch(query) {
+  if (!query || !query.trim()) {
+    searchState.query = '';
+    searchState.results = [];
+    searchState.displayedCount = 0;
+    searchState.hasMore = false;
+    renderAllConversationsPage();
+    updateSearchStatus('');
+    return;
+  }
+
+  searchState.isSearching = true;
+  searchState.query = query.trim().toLowerCase();
+  updateSearchStatus('搜索中...');
+
+  try {
+    const all = getItemsForKey('all-page');
+    const results = [];
+
+    // Search through conversations
+    for (const tab of all) {
+      let matchScore = 0;
+      const searchTerms = searchState.query.split(/\s+/);
+
+      // Search in title
+      if (tab.title && tab.title.toLowerCase().includes(searchState.query)) {
+        matchScore += 10;
+      }
+
+      // Search in description
+      if (tab.description && tab.description.toLowerCase().includes(searchState.query)) {
+        matchScore += 5;
+      }
+
+      // Search in messages (commands and outputs)
+      if (tab.state && Array.isArray(tab.state.messages)) {
+        for (const msgHtml of tab.state.messages) {
+          if (typeof msgHtml === 'string') {
+            // Extract text content from HTML
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = msgHtml;
+            const textContent = tempDiv.textContent || tempDiv.innerText || '';
+
+            if (textContent.toLowerCase().includes(searchState.query)) {
+              matchScore += 1;
+            }
+          }
+        }
+      }
+
+      // Add to results if matched
+      if (matchScore > 0) {
+        results.push({ ...tab, matchScore });
+      }
+    }
+
+    // Sort by match score (highest first)
+    results.sort((a, b) => b.matchScore - a.matchScore);
+
+    searchState.results = results;
+    searchState.displayedCount = Math.min(searchState.pageSize, results.length);
+    searchState.hasMore = results.length > searchState.displayedCount;
+    searchState.isSearching = false;
+
+    updateSearchStatus(`找到 ${results.length} 个匹配的对话`);
+    renderSearchResults();
+  } catch (err) {
+    console.error('[search] Search failed:', err);
+    searchState.isSearching = false;
+    updateSearchStatus('搜索失败');
+  }
+}
+
+function loadMoreSearchResults() {
+  if (!searchState.hasMore || searchState.isSearching) return;
+
+  const newCount = Math.min(
+    searchState.displayedCount + searchState.pageSize,
+    searchState.results.length
+  );
+
+  searchState.displayedCount = newCount;
+  searchState.hasMore = newCount < searchState.results.length;
+
+  renderSearchResults();
+}
+
+function loadMoreAllConversations() {
+  if (!allConversationsList) {
+    console.log('[LoadMore] allConversationsList not found');
+    return;
+  }
+
+  const all = getItemsForKey('all-page');
+  const sorted = sortTabsForDisplay(all);
+  const totalPages = Math.ceil(sorted.length / HOME_PAGE_SIZE);
+  const currentPage = pagination['all-page'];
+
+  console.log('[LoadMore] Total items:', sorted.length, 'Total pages:', totalPages, 'Current page:', currentPage);
+
+  // Check if there are more pages to load
+  if (currentPage + 1 >= totalPages) {
+    console.log('[LoadMore] No more pages to load');
+    return;
+  }
+
+  // Increment page
+  pagination['all-page'] = currentPage + 1;
+  console.log('[LoadMore] Loading page:', pagination['all-page']);
+
+  // Append next page items
+  const startIndex = pagination['all-page'] * HOME_PAGE_SIZE;
+  const pageItems = sorted.slice(startIndex, startIndex + HOME_PAGE_SIZE);
+
+  console.log('[LoadMore] Appending', pageItems.length, 'items');
+  for (const meta of pageItems) {
+    allConversationsList.appendChild(createHomeCard(meta, { allowDelete: true }));
+  }
+}
+
+function updateSearchStatus(message) {
+  if (!allConversationsSearchStatus) return;
+
+  if (message) {
+    allConversationsSearchStatus.textContent = message;
+    allConversationsSearchStatus.classList.remove('hidden');
+  } else {
+    allConversationsSearchStatus.classList.add('hidden');
+  }
+}
+
+function renderRecycleBinPage() {
+  if (!recycleBinView) return;
+
+  const trashTabs = getItemsForKey('recycle-page');
+  populateRecycleList(recycleBinList, trashTabs, 'recycle-page');
+
+  if (recycleBinEmpty) {
+    recycleBinEmpty.classList.toggle('hidden', trashTabs.length > 0);
+  }
+  if (recycleBinClearBtn) {
+    recycleBinClearBtn.disabled = trashTabs.length === 0;
+  }
+
+  scheduleScrollUpdate();
+}
+
+function showAllConversationsPage() {
+  // Hide all other views first
+  if (homeView) homeView.classList.add('hidden');
+  if (recycleBinView) recycleBinView.classList.add('hidden');
+  const settingsView = document.getElementById('settingsView');
+  if (settingsView) settingsView.classList.add('hidden');
+  if (workspaceView) workspaceView.classList.add('hidden');
+
+  // Update state
+  state.showHome = false;
+  if (appTitle) appTitle.classList.remove('home-active');
+
+  // Show all conversations view
+  if (allConversationsView) {
+    allConversationsView.classList.remove('hidden');
+  }
+
+  // Setup scroll listener for infinite scroll
+  setupInfiniteScroll();
+
+  renderAllConversationsPage();
+}
+
+function setupInfiniteScroll() {
+  const scrollContainer = allConversationsView;  // The .settings-view itself has the scroll
+  if (!scrollContainer) {
+    console.log('[InfiniteScroll] scrollContainer not found');
+    return;
+  }
+
+  // Remove existing listener if any
+  if (scrollContainer._scrollHandler) {
+    scrollContainer.removeEventListener('scroll', scrollContainer._scrollHandler);
+  }
+
+  // Create new scroll handler
+  const scrollHandler = () => {
+    // Skip if searching
+    if (searchState.isSearching) return;
+
+    const scrollTop = scrollContainer.scrollTop;
+    const scrollHeight = scrollContainer.scrollHeight;
+    const clientHeight = scrollContainer.clientHeight;
+
+    console.log('[InfiniteScroll] scrollTop:', scrollTop, 'clientHeight:', clientHeight, 'scrollHeight:', scrollHeight);
+
+    // Calculate how close to bottom (as percentage of viewport height)
+    const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
+    const threshold = Math.min(300, clientHeight * 0.5); // Use 50% of viewport height or 300px, whichever is smaller
+
+    console.log('[InfiniteScroll] distanceFromBottom:', distanceFromBottom, 'threshold:', threshold);
+
+    // Load more when user scrolls close to bottom
+    if (distanceFromBottom <= threshold) {
+      console.log('[InfiniteScroll] Reached bottom, loading more...');
+      // If in search mode, load more search results
+      if (searchState.query && searchState.hasMore) {
+        console.log('[InfiniteScroll] Loading more search results');
+        loadMoreSearchResults();
+      }
+      // If in normal mode, load next page of all conversations
+      else if (!searchState.query) {
+        console.log('[InfiniteScroll] Loading more all conversations');
+        loadMoreAllConversations();
+      }
+    }
+  };
+
+  scrollContainer._scrollHandler = scrollHandler;
+  scrollContainer.addEventListener('scroll', scrollHandler);
+  console.log('[InfiniteScroll] Scroll listener attached to settings-view');
+
+  // Auto-load more content if viewport is not filled
+  autoLoadUntilScroll(scrollContainer);
+}
+
+function autoLoadUntilScroll(container) {
+  if (!container) return;
+
+  // Use requestAnimationFrame to ensure DOM has updated
+  requestAnimationFrame(() => {
+    const scrollHeight = container.scrollHeight;
+    const clientHeight = container.clientHeight;
+    const hasScroll = scrollHeight > clientHeight;
+
+    console.log('[AutoLoad] scrollHeight:', scrollHeight, 'clientHeight:', clientHeight, 'hasScroll:', hasScroll);
+
+    // If no scroll bar and not in search mode, try to load more
+    if (!hasScroll && !searchState.query) {
+      const all = getItemsForKey('all-page');
+      const sorted = sortTabsForDisplay(all);
+      const totalPages = Math.ceil(sorted.length / HOME_PAGE_SIZE);
+      const currentPage = pagination['all-page'];
+
+      console.log('[AutoLoad] Current page:', currentPage, 'Total pages:', totalPages);
+
+      if (currentPage + 1 < totalPages) {
+        console.log('[AutoLoad] Loading more to fill viewport...');
+        loadMoreAllConversations();
+        // Recursively check again after loading
+        setTimeout(() => autoLoadUntilScroll(container), 100);
+      } else {
+        console.log('[AutoLoad] No more content to load');
+      }
+    }
+  });
+}
+
+function hideAllConversationsPage() {
+  if (allConversationsView) {
+    allConversationsView.classList.add('hidden');
+  }
+  showHome();
+}
+
+function showRecycleBinPage() {
+  // Hide all other views first
+  if (homeView) homeView.classList.add('hidden');
+  if (allConversationsView) allConversationsView.classList.add('hidden');
+  const settingsView = document.getElementById('settingsView');
+  if (settingsView) settingsView.classList.add('hidden');
+  if (workspaceView) workspaceView.classList.add('hidden');
+
+  // Update state
+  state.showHome = false;
+  if (appTitle) appTitle.classList.remove('home-active');
+
+  // Show recycle bin view
+  if (recycleBinView) {
+    recycleBinView.classList.remove('hidden');
+  }
+
+  renderRecycleBinPage();
+}
+
+function hideRecycleBinPage() {
+  if (recycleBinView) {
+    recycleBinView.classList.add('hidden');
+  }
+  showHome();
 }
 
 function populateHomeList(container, items, { allowDelete = false, pageKey } = {}) {
@@ -1143,9 +1623,9 @@ function populateHomeList(container, items, { allowDelete = false, pageKey } = {
   updatePagerIndicators(key, totalPages);
 }
 
-function populateRecycleList(container, items) {
+function populateRecycleList(container, items, pageKey = 'recycle') {
   if (!container) return;
-  const key = 'recycle';
+  const key = pageKey;
   const sorted = sortTabsForDisplay(items);
   const totalPages = ensurePaginationBounds(key, sorted.length);
   const startIndex = totalPages === 0 ? 0 : pagination[key] * HOME_PAGE_SIZE;
@@ -1574,6 +2054,10 @@ async function trashConversation(fileName) {
     const meta = state.savedTabs.find(tab => tab.fileName === fileName);
     const deletedAt = Date.now();
 
+    // Remember if we're on the all conversations page
+    const wasOnAllConversationsPage = !allConversationsView?.classList.contains('hidden');
+    const wasOnRecycleBinPage = !recycleBinView?.classList.contains('hidden');
+
     // Check if the conversation is currently open
     const openTabs = state.tabs.filter(tab => tab.fileName === fileName);
     const isCurrentlyOpen = openTabs.some(tab => tab.id === state.activeId);
@@ -1613,13 +2097,30 @@ async function trashConversation(fileName) {
     });
     await Promise.all(openTabs.map(tab => closeTab(tab.id)));
 
-    // If the deleted conversation was currently open, return to home
-    if (isCurrentlyOpen || state.tabs.length === 0) {
-      showHome();
+    // Refresh the current view without navigating away
+    await refreshSavedTabsList();
+
+    // Re-render and stay on the current page
+    if (wasOnAllConversationsPage) {
+      renderAllConversationsPageWithoutReset();
+      // Make sure we stay on the all conversations page
+      if (allConversationsView) {
+        allConversationsView.classList.remove('hidden');
+      }
+      if (homeView) {
+        homeView.classList.add('hidden');
+      }
+    } else if (wasOnRecycleBinPage) {
+      renderRecycleBinPage();
+      // Make sure we stay on the recycle bin page
+      if (recycleBinView) {
+        recycleBinView.classList.remove('hidden');
+      }
+      if (homeView) {
+        homeView.classList.add('hidden');
+      }
     }
 
-    pagination.recycle = 0;
-    await refreshSavedTabsList();
     scheduleScrollUpdate();
   } catch (err) {
     console.error('[trash] Failed to move conversation to recycle bin:', err);
@@ -1715,6 +2216,7 @@ async function init() {
   if (s.ok && s.data.splitRatio) state.splitRatio = s.data.splitRatio;
   applySplitRatio();
   setupChatContextMenu();
+  setupTabContextMenu();
 
   // 注册全局命令事件处理器（只注册一次）
   setupCommandEventHandlers();
@@ -1874,17 +2376,20 @@ function setupChatContextMenu() {
   // Show context menu on right click
   chatContainer.addEventListener('contextmenu', (e) => {
     e.preventDefault();
-    
-    // Hide file context menu if visible
+
+    // Hide tab and file context menus if visible
+    if (tabContextMenu) {
+      tabContextMenu.classList.add('hidden');
+    }
     const fileContextMenu = document.getElementById('fileContextMenu');
     if (fileContextMenu) {
       fileContextMenu.classList.add('hidden');
     }
-    
+
     // Position and show chat context menu
     const x = e.clientX;
     const y = e.clientY;
-    
+
     chatContextMenu.style.left = `${x}px`;
     chatContextMenu.style.top = `${y}px`;
     chatContextMenu.classList.remove('hidden');
@@ -1910,9 +2415,103 @@ function setupChatContextMenu() {
         selectAllText();
         break;
     }
-    
+
     chatContextMenu.classList.add('hidden');
   });
+}
+
+function showTabContextMenu(event, tab, index) {
+  if (!tabContextMenu) {
+    console.log('[tab-context] tabContextMenu element not found');
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  console.log('[tab-context] Showing menu for tab:', tab.id, 'at position:', event.clientX, event.clientY);
+
+  // Hide other context menus
+  if (chatContextMenu) {
+    chatContextMenu.classList.add('hidden');
+  }
+  const fileContextMenu = document.getElementById('fileContextMenu');
+  if (fileContextMenu) {
+    fileContextMenu.classList.add('hidden');
+  }
+
+  // Position and show tab context menu
+  const x = event.clientX;
+  const y = event.clientY;
+
+  tabContextMenu.style.left = `${x}px`;
+  tabContextMenu.style.top = `${y}px`;
+  tabContextMenu.classList.remove('hidden');
+
+  console.log('[tab-context] Menu displayed, classList:', tabContextMenu.classList.toString());
+
+  // Store current tab info for context menu actions
+  tabContextMenu.dataset.currentTabId = tab.id;
+  tabContextMenu.dataset.currentTabIndex = index;
+}
+
+function setupTabContextMenu() {
+  if (!tabContextMenu) return;
+
+  // Hide context menu when clicking elsewhere
+  document.addEventListener('click', (e) => {
+    if (!tabContextMenu.contains(e.target)) {
+      tabContextMenu.classList.add('hidden');
+    }
+  });
+
+  // Handle context menu actions
+  tabContextMenu.addEventListener('click', async (e) => {
+    const action = e.target.closest('.context-menu-item')?.dataset.action;
+    if (!action) return;
+
+    const tabId = tabContextMenu.dataset.currentTabId;
+    const tabIndex = parseInt(tabContextMenu.dataset.currentTabIndex, 10);
+
+    if (!tabId) return;
+
+    switch (action) {
+      case 'close':
+        await closeTab(tabId);
+        break;
+      case 'closeOthers':
+        await closeOtherTabs(tabId);
+        break;
+      case 'closeAll':
+        await closeAllTabs();
+        break;
+    }
+
+    tabContextMenu.classList.add('hidden');
+  });
+}
+
+async function closeOtherTabs(keepTabId) {
+  const tabsToClose = state.tabs.filter(t => t.id !== keepTabId);
+  for (const tab of tabsToClose) {
+    await closeTab(tab.id);
+  }
+}
+
+async function closeAllTabs() {
+  const confirmed = await requestConfirmation({
+    title: i18n.t('tab.closeAll.confirmTitle', '关闭所有标签页'),
+    message: i18n.t('tab.closeAll.confirmMessage', '确定要关闭所有标签页吗？'),
+    confirmText: i18n.t('tab.closeAll.confirmAction', '关闭'),
+    cancelText: i18n.t('modal.confirm.cancel', '取消')
+  });
+
+  if (!confirmed) return;
+
+  const allTabs = [...state.tabs];
+  for (const tab of allTabs) {
+    await closeTab(tab.id);
+  }
 }
 
 function copySelectedText() {
@@ -1972,12 +2571,15 @@ function renderTabs() {
     const isActive = !state.showHome && t.id === state.activeId;
     const tab = document.createElement('div');
     tab.className = 'tab' + (isActive ? ' active' : '');
+    tab.dataset.tabId = t.id;
     tab.onclick = () => setActiveTab(t.id);
+
     const titleEl = document.createElement('span');
     titleEl.className = 'tab-title';
     titleEl.textContent = t.title || `Chat-${index + 1}`;
     titleEl.title = titleEl.textContent;
     tab.appendChild(titleEl);
+
     tab.ondblclick = async (e) => {
       e.stopPropagation();
       const currentTitle = t.title || 'Chat';
@@ -1986,11 +2588,24 @@ function renderTabs() {
         await renameTabFile(t, input);
       }
     };
+
     const close = document.createElement('span');
     close.className = 'tab-close';
     close.textContent = '×';
     close.onclick = (e) => { e.stopPropagation(); closeTab(t.id); };
     tab.appendChild(close);
+
+    // Add right-click context menu - must be after all children are added
+    // Use addEventListener to ensure it captures events from children
+    tab.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log('[tab-context] Right-click on tab:', t.id, 'index:', index);
+      console.log('[tab-context] tabContextMenu element:', tabContextMenu);
+      console.log('[tab-context] tabContextMenu exists:', !!tabContextMenu);
+      showTabContextMenu(e, t, index);
+    });
+
     tabsEl.appendChild(tab);
   });
 
@@ -2254,12 +2869,10 @@ async function addNewTab(options = {}) {
 
   state.tabs.push(tabEntry);
 
-  // Mark terminal as ready immediately after adding to state.tabs
-  // This ensures the tab is in the state before any data arrives
-  tabEntry.terminalReady = true;
-
-  // Enable ChatTerminal input now that PTY is ready
-  chatTerm.terminalReady = true;
+  // DO NOT mark terminal as ready yet - wait for first data to arrive
+  // This prevents race conditions where commands execute before onData handler is fully connected
+  tabEntry.terminalReady = false;
+  chatTerm.terminalReady = false;
   chatTerm.updateInputAffordances();
 
   setActiveTab(id, { skipSave: true });
@@ -2318,6 +2931,23 @@ function setActiveTab(id, { skipSave = false } = {}) {
   sessionState.activeTab = t.fileName || null;
   scheduleSessionSave();
   hideHome();
+
+  // Close all auxiliary views when switching to a tab
+  if (allConversationsView) {
+    allConversationsView.classList.add('hidden');
+  }
+  if (recycleBinView) {
+    recycleBinView.classList.add('hidden');
+  }
+  const settingsView = document.getElementById('settingsView');
+  if (settingsView) {
+    settingsView.classList.add('hidden');
+  }
+
+  // Ensure workspace is visible
+  if (workspaceView) {
+    workspaceView.classList.remove('hidden');
+  }
 
   syncChatTermActivity(t.id);
 
@@ -2443,6 +3073,11 @@ function handleTermData(tabId, term, chatTerm, data) {
   const tabForReady = state.tabs.find(t => t.id === tabId);
   if (tabForReady && !tabForReady.terminalReady) {
     tabForReady.terminalReady = true;
+    // Also update ChatTerminal's ready state and refresh input affordances
+    if (chatTerm && !chatTerm.terminalReady) {
+      chatTerm.terminalReady = true;
+      chatTerm.updateInputAffordances();
+    }
     try { console.log(`[terminal] Tab ${tabId} received data; marked ready`); } catch (_) {}
   }
   let promptDetected = false;
@@ -3008,5 +3643,247 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !conflictModal.classList.contains('hidden')) {
     e.preventDefault();
     conflictCancel.click();
+  }
+}, true);
+
+// ============================================
+// FIND IN PAGE FUNCTIONALITY
+// ============================================
+
+const findInPage = document.getElementById('findInPage');
+const findInput = document.getElementById('findInput');
+const findResultsText = document.getElementById('findResultsText');
+const findPrevBtn = document.getElementById('findPrevBtn');
+const findNextBtn = document.getElementById('findNextBtn');
+const findCloseBtn = document.getElementById('findCloseBtn');
+
+let findMatches = [];
+let currentMatchIndex = -1;
+
+// Show find box
+function showFindInPage() {
+  if (!findInPage) return;
+
+  findInPage.classList.remove('hidden');
+  findInput.value = '';
+  findInput.focus();
+  clearFindHighlights();
+  updateFindResults();
+}
+
+// Hide find box
+function hideFindInPage() {
+  if (!findInPage) return;
+
+  findInPage.classList.add('hidden');
+  clearFindHighlights();
+  findMatches = [];
+  currentMatchIndex = -1;
+}
+
+// Clear all find highlights
+function clearFindHighlights() {
+  const highlights = chatMessages.querySelectorAll('.find-highlight, .find-highlight-current');
+  highlights.forEach(highlight => {
+    const parent = highlight.parentNode;
+    const textNode = document.createTextNode(highlight.textContent);
+    parent.replaceChild(textNode, highlight);
+    parent.normalize(); // Merge adjacent text nodes
+  });
+}
+
+// Perform find operation
+function performFind(query) {
+  clearFindHighlights();
+  findMatches = [];
+  currentMatchIndex = -1;
+
+  if (!query || query.trim() === '') {
+    updateFindResults();
+    return;
+  }
+
+  const searchText = query.toLowerCase();
+  const walker = document.createTreeWalker(
+    chatMessages,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode: function(node) {
+        // Skip if parent is script, style, or already highlighted
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        const tagName = parent.tagName.toLowerCase();
+        if (tagName === 'script' || tagName === 'style') {
+          return NodeFilter.FILTER_REJECT;
+        }
+        if (parent.classList.contains('find-highlight')) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        // Only accept if text contains search query
+        if (node.textContent.toLowerCase().includes(searchText)) {
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        return NodeFilter.FILTER_REJECT;
+      }
+    }
+  );
+
+  const nodesToHighlight = [];
+  let node;
+  while (node = walker.nextNode()) {
+    nodesToHighlight.push(node);
+  }
+
+  // Highlight matches
+  nodesToHighlight.forEach(textNode => {
+    const text = textNode.textContent;
+    const lowerText = text.toLowerCase();
+    const parent = textNode.parentNode;
+
+    let lastIndex = 0;
+    let index = lowerText.indexOf(searchText);
+
+    if (index === -1) return;
+
+    const fragment = document.createDocumentFragment();
+
+    while (index !== -1) {
+      // Add text before match
+      if (index > lastIndex) {
+        fragment.appendChild(document.createTextNode(text.substring(lastIndex, index)));
+      }
+
+      // Add highlighted match
+      const matchText = text.substring(index, index + query.length);
+      const highlight = document.createElement('span');
+      highlight.className = 'find-highlight';
+      highlight.textContent = matchText;
+      fragment.appendChild(highlight);
+
+      findMatches.push(highlight);
+
+      lastIndex = index + query.length;
+      index = lowerText.indexOf(searchText, lastIndex);
+    }
+
+    // Add remaining text
+    if (lastIndex < text.length) {
+      fragment.appendChild(document.createTextNode(text.substring(lastIndex)));
+    }
+
+    parent.replaceChild(fragment, textNode);
+  });
+
+  // Select first match
+  if (findMatches.length > 0) {
+    currentMatchIndex = 0;
+    highlightCurrentMatch();
+  }
+
+  updateFindResults();
+}
+
+// Highlight current match
+function highlightCurrentMatch() {
+  // Remove current highlight from all matches
+  findMatches.forEach(match => {
+    match.classList.remove('find-highlight-current');
+  });
+
+  // Add current highlight
+  if (currentMatchIndex >= 0 && currentMatchIndex < findMatches.length) {
+    const currentMatch = findMatches[currentMatchIndex];
+    currentMatch.classList.add('find-highlight-current');
+
+    // Scroll to match
+    currentMatch.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+      inline: 'nearest'
+    });
+  }
+}
+
+// Navigate to next match
+function findNext() {
+  if (findMatches.length === 0) return;
+
+  currentMatchIndex = (currentMatchIndex + 1) % findMatches.length;
+  highlightCurrentMatch();
+  updateFindResults();
+}
+
+// Navigate to previous match
+function findPrevious() {
+  if (findMatches.length === 0) return;
+
+  currentMatchIndex = (currentMatchIndex - 1 + findMatches.length) % findMatches.length;
+  highlightCurrentMatch();
+  updateFindResults();
+}
+
+// Update find results display
+function updateFindResults() {
+  if (!findResultsText) return;
+
+  if (findMatches.length === 0) {
+    findResultsText.textContent = '0/0';
+    findPrevBtn.disabled = true;
+    findNextBtn.disabled = true;
+  } else {
+    findResultsText.textContent = `${currentMatchIndex + 1}/${findMatches.length}`;
+    findPrevBtn.disabled = false;
+    findNextBtn.disabled = false;
+  }
+}
+
+// Event listeners
+if (findInput) {
+  findInput.addEventListener('input', (e) => {
+    performFind(e.target.value);
+  });
+
+  findInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (e.shiftKey) {
+        findPrevious();
+      } else {
+        findNext();
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      hideFindInPage();
+    }
+  });
+}
+
+if (findPrevBtn) {
+  findPrevBtn.addEventListener('click', () => {
+    findPrevious();
+  });
+}
+
+if (findNextBtn) {
+  findNextBtn.addEventListener('click', () => {
+    findNext();
+  });
+}
+
+if (findCloseBtn) {
+  findCloseBtn.addEventListener('click', () => {
+    hideFindInPage();
+  });
+}
+
+// Global keyboard shortcut: Command+F (Mac) or Ctrl+F (Windows/Linux)
+window.addEventListener('keydown', (e) => {
+  // Check for Command+F (Mac) or Ctrl+F (Windows/Linux)
+  if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+    // Only activate if we're in workspace view (not home view)
+    if (!workspaceView.classList.contains('hidden')) {
+      e.preventDefault();
+      showFindInPage();
+    }
   }
 }, true);

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" aria-label="SmartTerminal — dark tile">
+  <defs>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00E5FF"/>
+      <stop offset="100%" stop-color="#0077FF"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" fill="#0A0B0D"/>
+  <g transform="translate(0,0)">
+    <path d="M320 288 L568 512 L320 736" fill="none" stroke="url(#accent)" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="608" y="620" width="200" height="48" rx="24" fill="url(#accent)"/>
+  </g>
+</svg>
