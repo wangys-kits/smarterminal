@@ -2199,6 +2199,21 @@ export class ChatTerminal {
       let t = String(chunk);
       // Normalize CRLF/CR to \n
       t = t.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+      // Apply backspaces/DEL before stripping control chars, to preserve intended edits
+      // Example: "d\bdocker ps" should become "docker ps" instead of "ddocker ps"
+      {
+        let out = '';
+        for (let i = 0; i < t.length; i++) {
+          const code = t.charCodeAt(i);
+          if (code === 0x08 /* \b */ || code === 0x7f /* DEL */) {
+            if (out.length) out = out.slice(0, -1);
+          } else {
+            out += t[i];
+          }
+        }
+        t = out;
+      }
       // Remove OSC sequences: ESC ] ... (BEL or ST)
       t = t.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '');
       // Remove ANSI/CSI sequences (colors, cursor moves, etc.)
@@ -2223,7 +2238,9 @@ export class ChatTerminal {
         truncated = true;
         slice = slice.slice(-this._displayCap);
       }
-      let clean = this._outputIsSanitized ? slice : this.cleanTerminalOutput(slice, command);
+      // Always run the full cleaner here so we can remove echoed commands/prompts
+      // even if the buffer is already sanitized by preCleanChunk.
+      let clean = this.cleanTerminalOutput(slice, command);
       // Soft-wrap very long single lines to avoid expensive layout on huge unbroken lines
       if (this._maxVisualLineLen && this._maxVisualLineLen > 0) {
         try {
@@ -2522,10 +2539,19 @@ export class ChatTerminal {
   }
 
   handlePromptReady() {
-    if (!this.isCommandRunning || !this.currentCommand) {
-      return;
+    // Only finalize when we truly see a primary prompt for the current command.
+    // Renderer may call this on heuristics (e.g. ESC[?2004l), which can arrive
+    // before the actual command output. Guard with prompt detection and alt-screen state.
+    if (!this.isCommandRunning || !this.currentCommand) return;
+    if (this.currentCommand.altScreenActive || this.currentCommand.syncOutputActive) return;
+    const buf = this.currentCommand.promptBuffer || '';
+    const isSecondary = this.detectSecondaryPrompt(buf);
+    const isPrimary = !isSecondary && this.detectShellPrompt(buf);
+    if (isPrimary) {
+      this.finalizeCommandOutput();
+    } else if (this.debugEnabled) {
+      this.dbg('handlePromptReady ignored: no primary prompt yet');
     }
-    this.finalizeCommandOutput();
   }
 
   finalizeCommandOutput() {
@@ -3171,6 +3197,27 @@ export class ChatTerminal {
       clean = clean.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     }
 
+    // Apply "editing" control characters before stripping them, so we don't lose intent.
+    // Most notably, handle backspace (\b, 0x08) and DEL (0x7f) which some shells emit
+    // as the line editor corrects input. Without this, sequences like "d\bdocker ps"
+    // turn into "ddocker ps" after we strip control chars.
+    const applyBackspaces = (s) => {
+      if (!s || typeof s !== 'string') return s;
+      let out = '';
+      for (let i = 0; i < s.length; i++) {
+        const ch = s.charCodeAt(i);
+        if (ch === 0x08 /* \b */ || ch === 0x7f /* DEL */) {
+          // Remove the last code unit if present
+          if (out.length) out = out.slice(0, -1);
+        } else {
+          out += s[i];
+        }
+      }
+      return out;
+    };
+
+    clean = applyBackspaces(clean);
+
     // Step 1: Remove OSC (Operating System Command) sequences first
     // These include window title updates like: ESC ]0;title BEL
     clean = clean.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '');
@@ -3187,7 +3234,7 @@ export class ChatTerminal {
     // Remove OSC/DCS style sequences that use ST terminators (e.g. ESC P ... ESC \)
     clean = clean.replace(/\u001b[PX^_][\s\S]*?\u001b\\/g, '');
 
-    // Step 4: Remove control characters
+    // Step 4: Remove control characters (we already applied backspaces above)
     clean = clean.replace(/([\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f])+/g, '');
     clean = clean.replace(/\x00/g, '');
     clean = clean.replace(/\x07/g, '');
