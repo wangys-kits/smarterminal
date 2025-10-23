@@ -4,10 +4,20 @@
    ============================================ */
 
 :root {
-  --chat-content-max-width: 1120px;
-  --chat-content-padding-x: clamp(16px, 6vw, 56px);
-  --chat-description-max-width: 68ch;
+  /*
+   * Widen chat view and use narrower side gutters.
+   * This affects: title, description, messages, and command input in the Chat tab.
+   */
+  --chat-content-max-width: 1360px;            /* was 1120px */
+  --chat-content-padding-x: clamp(12px, 3.5vw, 36px); /* was clamp(16px, 6vw, 56px) */
+  --chat-description-max-width: 80ch;          /* was 68ch */
+
   --history-command-width: 760px;
+  /* Shared max width for Home (banner + sections) */
+  /* Wider home content container for large screens */
+  --home-content-max-width: 1600px;
+  /* Make tabs taller for stronger presence */
+  --tab-height: 44px;
 }
 
 /* ============================================
@@ -241,7 +251,7 @@ body {
   display: flex;
   align-items: flex-end;
   padding: 0 var(--space-xs);
-  background: var(--bg-primary);
+  background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg-primary) 100%);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-sm);
   margin-left: var(--space-md);
@@ -251,6 +261,7 @@ body {
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.15);
 }
 
 .tabs-scroll-container {
@@ -337,11 +348,12 @@ body {
   align-items: flex-end;
   justify-content: space-between;
   padding: 0 var(--space-xs);
-  background: var(--bg-primary);
-  border-bottom: 1px solid var(--border-primary);
+  background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg-primary) 100%);
+  border-bottom: 2px solid var(--border-primary);
   flex-shrink: 0;
   position: relative;
   z-index: var(--z-base);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.18);
 }
 
 .tabs {
@@ -383,13 +395,15 @@ body {
   border-bottom: none;
   border-right: none;
   color: var(--text-secondary);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   cursor: pointer;
   transition: all var(--transition-normal) ease-in-out;
   max-width: 560px;
   min-width: 320px;
   flex-shrink: 0;
   z-index: var(--z-base);
+  border-top-left-radius: var(--radius-md);
+  border-top-right-radius: var(--radius-md);
 }
 
 .tab:first-child {
@@ -399,21 +413,40 @@ body {
 .tab:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+  border-color: var(--border-hover, var(--color-accent));
+  box-shadow: 0 2px 6px rgba(0,0,0,0.12);
 }
 
 .tab.active {
-  background: var(--bg-secondary);
-  color: var(--color-accent);
-  border-color: var(--border-primary);
+  background: linear-gradient(180deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+  color: var(--text-primary);
+  border-color: var(--color-accent);
   border-bottom: 1px solid var(--bg-secondary);
   z-index: 1;
   font-weight: var(--font-weight-semibold);
   transform: translateY(-2px);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(49,106,197,0.25) inset;
 }
 
 .tab.active .tab-title {
   color: inherit;
+}
+
+/*
+ * Status dot visibility rules
+ * - Running: show on any tab (active or not)
+ * - Completed: show only on inactive tabs (clicking the tab clears the dot in JS)
+ * - Idle: no dot
+ * Previously we always showed a dot on active tabs, which made the blue
+ * completion indicator appear to persist after activating the tab. Restrict
+ * the active-tab styling so it does not force the dot to be visible unless
+ * it is actually in a running state.
+ */
+/* Show a (accent) dot on the active tab only when it's running */
+.tab.active.is-running .tab-status {
+  opacity: 1;
+  background: var(--color-accent);
+  transform: scale(1);
 }
 
 .tab.active::after {
@@ -426,6 +459,19 @@ body {
   background: var(--color-accent);
   border-radius: 999px;
   transition: all var(--transition-normal) ease-in-out;
+}
+
+/* Add a thin accent line at the very top of the active tab for extra emphasis */
+.tab.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -1px;
+  height: 3px;
+  background: var(--color-accent);
+  border-top-left-radius: var(--radius-md);
+  border-top-right-radius: var(--radius-md);
 }
 
 .tab-status {
@@ -492,6 +538,8 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: center;
+  font-size: var(--font-size-md);
+  letter-spacing: 0.01em;
 }
 
 .tab-close {
@@ -511,8 +559,8 @@ body {
 }
 
 .tab.active .tab-close {
-  color: var(--color-accent);
-  opacity: 0.8;
+  color: var(--text-primary);
+  opacity: 0.9;
 }
 
 .new-tab {
@@ -524,7 +572,8 @@ body {
    ============================================ */
 .split {
   position: fixed;
-  top: calc(var(--toolbar-height) + var(--tab-height) + var(--space-sm));
+  /* Inline tab bar lives inside the toolbar; keep a tiny visual breathing space */
+  top: calc(var(--toolbar-height) + 2px);
   left: 0;
   right: 0;
   bottom: var(--statusbar-height);
@@ -567,6 +616,29 @@ body {
   height: 100%;
   position: relative;
   width: 100%;
+}
+
+/* Session restart overlay */
+.restart-overlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.restart-text {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+.restart-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(255,255,255,0.25);
+  border-top-color: var(--color-accent, #2f80ed);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .chat-scroll-controls {
@@ -1079,6 +1151,28 @@ body {
   margin: 0;
 }
 
+/* Reusable code gutter (line numbers) used by input editor and cells */
+.code-gutter {
+  font-family: var(--font-family-mono);
+  font-size: var(--command-font-size, var(--font-size-md));
+  color: var(--text-tertiary);
+  min-width: 3ch; /* space for 3-digit line numbers */
+  text-align: right;
+  padding-right: var(--space-sm);
+  border-right: 1px solid var(--border-secondary);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.code-gutter .gutter-line { /* one number per logical line */
+  line-height: var(--line-height-normal);
+}
+
+/* Align gutter vertically with textarea padding */
+.command-input-container .code-gutter {
+  padding-top: var(--space-sm);
+}
+
 .input-prefix {
   display: flex;
   align-items: center;
@@ -1120,6 +1214,8 @@ body {
   transition: all var(--transition-fast);
   box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05);
   position: relative;
+  /* Make caret visible in dark mode */
+  caret-color: var(--color-accent);
 }
 
 /* Editable state indicator - subtle gradient overlay */
@@ -1374,6 +1470,11 @@ body {
   align-items: center;
 }
 
+/* Place the follow button at the far right within the controls row */
+.cell-content.cell-controls-content .control-follow {
+  margin-left: auto;
+}
+
 .cell-control-btn {
   min-width: 72px;
   padding: 6px 12px;
@@ -1475,6 +1576,8 @@ body {
   padding: var(--space-md);
   border: 1px solid var(--border-secondary);
   overflow-x: auto;
+  /* For showing a subtle editable indicator bar */
+  position: relative;
 }
 
 .cell-content pre {
@@ -1539,6 +1642,32 @@ body {
   color: var(--command-font-color, var(--text-primary));
 }
 
+/* Improve edit affordance for command cells */
+.cell-input .cell-content::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--color-accent) 0%, transparent 50%, var(--color-accent) 100%);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  pointer-events: none;
+}
+
+.cell-input .cell-content:hover::before,
+.cell-input .cell-content:focus-within::before {
+  opacity: 1;
+}
+
+/* Layout for command cell editor with gutter */
+.cell-input .cell-content .cell-input-editor {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+}
+
 .cell-input .cell-content:focus-within {
   border-color: var(--color-accent);
   background: var(--bg-primary);
@@ -1596,10 +1725,30 @@ body {
 .cell-input-text {
   cursor: text;
   outline: none;
+  /* Accent caret improves visibility in dark theme */
+  caret-color: var(--color-accent);
 }
 
 .cell-input-text:focus {
   background: transparent;
+}
+
+/* Placeholder for empty contenteditable command cell */
+.cell-input-text:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-tertiary);
+  font-style: italic;
+  pointer-events: none;
+}
+
+/* Dark theme tweaks: slightly stronger borders for editor surfaces */
+:root[data-theme="dark"] .cell-content {
+  border-color: #3A3F4B; /* higher contrast than --border-secondary */
+}
+
+:root[data-theme="dark"] .command-input {
+  border-color: #3A3F4B;
+  background: var(--bg-tertiary);
 }
 
 .markdown-editor {
@@ -2250,6 +2399,7 @@ body {
 .path-input-field {
   padding-left: 32px; /* room for icon */
   font-family: var(--font-family-mono);
+  width: 100%;
 }
 .path-prefix {
   position: absolute;
@@ -2399,6 +2549,15 @@ body {
   position: relative;
 }
 
+/* Constrain home sections to a unified content width */
+.home-view > section {
+  width: 100%;
+  /* Use viewport clamp to keep small margins and expand on large screens */
+  max-width: min(96vw, var(--home-content-max-width));
+  margin-left: auto;
+  margin-right: auto;
+}
+
 /* Settings View */
 .settings-view {
   position: fixed;
@@ -2411,6 +2570,17 @@ body {
   background: var(--bg-primary);
   color: var(--text-primary);
   z-index: 100;
+}
+
+/* Hide scrollbars specifically for the All Conversations page while preserving scroll */
+#allConversationsView {
+  scrollbar-width: none;            /* Firefox */
+  -ms-overflow-style: none;         /* IE/Edge */
+  overflow-x: hidden;               /* Hide horizontal scrollbar explicitly */
+}
+#allConversationsView::-webkit-scrollbar { /* Chrome/Safari */
+  width: 0;
+  height: 0;
 }
 
 .settings-container {
@@ -2613,8 +2783,29 @@ body {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: var(--space-lg);
-  max-width: 1200px;
-  margin: 0 auto;
+  /* Inherit width from parent container for consistent edges */
+  max-width: 100%;
+  margin: 0;
+}
+
+/* Features grid responsiveness */
+@media (max-width: 1080px) {
+  .home-features-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Ultra-wide screens: add one more column to spread content */
+@media (min-width: 1680px) {
+  .home-features-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .home-features-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .home-feature-card {
@@ -2732,11 +2923,13 @@ body {
 
 .home-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  /* Allow 3 columns within 1200px container, degrade responsively */
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
   gap: var(--space-lg);
-  width: min(95%, 1440px);
+  /* Fill section container width to align with banner */
+  width: 100%;
   grid-auto-rows: minmax(0, 1fr);
-  margin: 0 auto;
+  margin: 0;
   touch-action: pan-y;
   transition: transform var(--transition-base, 220ms ease), opacity var(--transition-fast, 160ms ease);
   transform: translateX(0);
@@ -2838,6 +3031,8 @@ body {
   box-shadow: var(--shadow-xs, 0 12px 28px rgba(0, 0, 0, 0.08));
   transition: transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
   cursor: pointer;
+  /* Allow grid items to shrink within their tracks to avoid overflow */
+  min-width: 0;
 }
 
 .home-card-delete {
@@ -2947,6 +3142,12 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Enlarge card titles specifically on All Conversations page for better readability */
+#allConversationsView .home-card-title {
+  font-size: var(--font-size-lg);
+  line-height: 1.3;
 }
 
 .home-card-badge {
@@ -3852,7 +4053,8 @@ body {
    ============================================ */
 .home-card-grid-2col {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  /* Use minmax(0, 1fr) so long content won't force horizontal overflow */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-xl);
 }
 

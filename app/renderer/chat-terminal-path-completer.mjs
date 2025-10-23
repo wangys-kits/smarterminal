@@ -6,6 +6,10 @@ export class PathCompleter {
     this.cache = new Map(); // Cache directory listings
     this.cacheTimeout = 5000; // 5 seconds cache
     this.homeDir = null; // Cache home directory
+    // Remote execution context (e.g., active SSH). When set, listings
+    // will be fetched from remote instead of local fs.
+    // Shape: { type: 'ssh', target: { user, host, port } } or null
+    this.remoteContext = null;
     this.initHomeDir();
   }
 
@@ -28,6 +32,24 @@ export class PathCompleter {
    */
   updateCurrentDirectory(cwd) {
     this.currentDir = cwd;
+  }
+
+  /**
+   * Set or clear remote context used for path completion (e.g., SSH target)
+   */
+  setRemoteContext(ctx) {
+    if (ctx && ctx.type === 'ssh' && ctx.target && ctx.target.host) {
+      this.remoteContext = {
+        type: 'ssh',
+        target: {
+          user: ctx.target.user || '',
+          host: ctx.target.host,
+          port: ctx.target.port || ''
+        }
+      };
+    } else {
+      this.remoteContext = null;
+    }
   }
 
   /**
@@ -86,7 +108,8 @@ export class PathCompleter {
 
       // Only trigger for file-related commands
       const fileCommands = [
-        'cat', 'less', 'more', 'head', 'tail', 'vim', 'vi', 'nano', 'emacs',
+        // Navigation and common file ops
+        'cd', 'cat', 'less', 'more', 'head', 'tail', 'vim', 'vi', 'nano', 'emacs',
         'code', 'open', 'edit', 'rm', 'mv', 'cp', 'chmod', 'chown',
         'grep', 'awk', 'sed', 'diff', 'file', 'stat', 'wc', 'sort',
         'uniq', 'cut', 'paste', 'tr', 'tee', 'touch', 'ln'
@@ -135,6 +158,11 @@ export class PathCompleter {
     if (!directory) return this.currentDir || '/';
 
     // Handle home directory
+    if (this.remoteContext && (directory === '~' || directory.startsWith('~/'))) {
+      // In remote context, defer ~ expansion to the remote shell
+      return directory;
+    }
+
     if (directory === '~' || directory === '~/') {
       let homeDir = this.getHomeDirectory();
 
@@ -218,41 +246,104 @@ export class PathCompleter {
       prefix,
       resolvedDir,
       homeDir: this.homeDir,
-      currentDir: this.currentDir
+      currentDir: this.currentDir,
+      remote: this.remoteContext ? (this.remoteContext.type || 'remote') : null
     });
 
     try {
-      // Check cache first
-      const cacheKey = resolvedDir;
+      // Check cache first (keyed by local or remote)
+      const cacheKey = this.remoteContext
+        ? `ssh://${this.remoteContext.target.user || ''}@${this.remoteContext.target.host}${this.remoteContext.target.port ? ':' + this.remoteContext.target.port : ''}${resolvedDir}`
+        : resolvedDir;
       const cached = this.cache.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < this.cacheTimeout) {
         return this.filterAndSort(cached.entries, prefix);
       }
 
-      // Query file system
-      console.log('[PathCompleter] Querying fs.list for:', resolvedDir);
-      const result = await window.sm.fs.list({ path: resolvedDir });
-      console.log('[PathCompleter] fs.list result:', result);
-
-      if (!result.ok || !Array.isArray(result.data)) {
-        console.warn('[PathCompleter] Invalid result:', result);
-        return [];
+      let entries = [];
+      if (this.remoteContext && this.remoteContext.type === 'ssh') {
+        entries = await this.remoteList(resolvedDir, this.remoteContext.target);
+      } else {
+        // Query local file system via IPC
+        console.log('[PathCompleter] Querying fs.list for:', resolvedDir);
+        const result = await window.sm.fs.list({ path: resolvedDir });
+        console.log('[PathCompleter] fs.list result:', result);
+        if (!result.ok || !Array.isArray(result.data)) {
+          console.warn('[PathCompleter] Invalid result:', result);
+          return [];
+        }
+        entries = result.data;
       }
 
       // Cache the results
       this.cache.set(cacheKey, {
-        entries: result.data,
+        entries,
         timestamp: Date.now()
       });
 
       // Filter and sort
-      const filtered = this.filterAndSort(result.data, prefix);
+      const filtered = this.filterAndSort(entries, prefix);
       console.log('[PathCompleter] Filtered results:', filtered.length);
       return filtered;
     } catch (err) {
       console.warn('[PathCompleter] Failed to get completions:', err);
       return [];
     }
+  }
+
+  /**
+   * List a remote directory via ssh best-effort.
+   */
+  async remoteList(dir, target) {
+    if (!dir || !target || !target.host) return [];
+    const userHost = (target.user ? `${target.user}@` : '') + target.host;
+    const portArg = target.port ? `-p ${target.port}` : '';
+    const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
+    // Expand ~ using $HOME to avoid quoting expansion issues
+    let dirExpr;
+    if (dir === '~') {
+      dirExpr = '$HOME';
+    } else if (dir.startsWith('~/')) {
+      const rest = dir.slice(2);
+      dirExpr = `$HOME/${rest.replace(/'/g, "'\\''")}`;
+    } else {
+      dirExpr = q(dir);
+    }
+    const remoteCmd = `sh -lc "printf '__SMRT_BEGIN__\\n'; ls -1A -p ${dirExpr} 2>/dev/null || true; printf '__SMRT_END__\\n'"`;
+    const full = `ssh -o BatchMode=yes -o ConnectTimeout=3 ${portArg} ${userHost} ${q(remoteCmd)}`.replace(/\s+/g, ' ').trim();
+
+    const commandId = `ls_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+    const out = [];
+    const onData = (m) => {
+      if (m && m.commandId === commandId && typeof m.data === 'string') {
+        out.push(m.data);
+      }
+    };
+    const onExit = () => {};
+    try { window.sm.cmd.onData(onData); window.sm.cmd.onExit(onExit); } catch (_) {}
+
+    try {
+      const execRes = await window.sm.cmd.execute({ commandId, command: full, cwd: undefined });
+      if (!execRes?.ok) return [];
+      await new Promise((resolve) => {
+        const handler = (m) => { if (m && m.commandId === commandId) { try { window.sm.cmd.onExit(() => {}); } catch (_) {} resolve(); } };
+        try { window.sm.cmd.onExit(handler); } catch (_) { resolve(); }
+      });
+    } catch (_) { return []; }
+
+    const text = out.join('');
+    const s = '__SMRT_BEGIN__';
+    const e = '__SMRT_END__';
+    const i1 = text.indexOf(s);
+    const i2 = text.lastIndexOf(e);
+    if (i1 === -1 || i2 === -1 || i2 <= i1) return [];
+    const lines = text.slice(i1 + s.length, i2).split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+    return lines.map((name) => {
+      let type = 'file';
+      if (name.endsWith('/')) { type = 'dir'; name = name.slice(0, -1); }
+      else if (name.endsWith('@')) { type = 'symlink'; name = name.slice(0, -1); }
+      return { name, type };
+    });
   }
 
   /**

@@ -38,6 +38,10 @@ export class ChatTerminal {
     this.getTabState = null;  // Function to get current tab state
     this.onCommandRunningChange = null; // Callback for tab-level command status
     this.terminalReady = false;  // PTY is ready to accept commands
+    // Host (renderer) may provide a direct persist callback to force an
+    // immediate save of this tab's state. We keep it optional to avoid
+    // tight coupling; when undefined we fall back to debounced saves.
+    this.requestPersist = null;
 
     // Double Tab detection for command suggestions
     this.lastTabTime = 0;
@@ -48,6 +52,11 @@ export class ChatTerminal {
     this.suggestions = new CommandSuggestions();
     this.cellManager = new CellManager(this);
     this.pathCompleter = new PathCompleter();
+
+    // Line number gutter for current textarea input
+    try {
+      this.inputLineNumbersEl = document.getElementById('inputLineNumbers');
+    } catch (_) { this.inputLineNumbersEl = null; }
 
     // Expose cell manager properties for backward compatibility
     this.cellCounter = 1;
@@ -105,6 +114,26 @@ export class ChatTerminal {
     if (this.debugEnabled) {
       try { console.log(this._debugPrefix(), 'debug enabled'); } catch (_) {}
     }
+    // Throttle and cap output rendering to prevent UI freezes on large streams
+    this._pendingRender = false;
+    this._pendingRAF = null;
+    this._pendingTO = null;
+    this._lastRenderTS = 0;
+    this._displayCap = 50000;   // 50 KB tail for DOM update (reduced)
+    this._bufferCap = 256000;   // keep at most 256 KB per command (reduced)
+    this._flushFallbackMs = 250; // rAF fallback flush interval (slightly slower to reduce churn)
+    this._minRenderIntervalMs = 120; // throttle paints to ~8 FPS under heavy streams
+    // Rendering safety thresholds: when exceeded, fall back to simple text rendering (no per-line DOM)
+    this._largeRenderLimit = 20000; // bytes (very low to always prefer lightweight rendering)
+    this._lineRenderLimit = 200;    // lines (very low)
+    // Visual wrapping: insert soft line breaks into extremely long single lines to avoid layout thrash
+    this._maxVisualLineLen = 128;   // characters per visual line (aggressive soft-wrap)
+    // Coalesced rendering: accumulate bytes and only paint when threshold or newline
+    this._accBytesSincePaint = 0;
+    this._renderByteThreshold = 16384; // paint after ~16KB or newline
+    this._outputIsSanitized = false; // whether output buffer stores pre-cleaned text
+    // Initialize line-number gutter for empty input
+    try { this.updateInputLineNumbers(); } catch (_) {}
   }
 
   // Best-effort platform detection to avoid hard IPC dependency
@@ -251,6 +280,7 @@ export class ChatTerminal {
         // Otherwise clear input
         this.input.value = '';
         this.input.rows = 1;
+        this.updateInputLineNumbers();
       }
     });
 
@@ -314,6 +344,7 @@ export class ChatTerminal {
       const lines = Math.min(10, Math.ceil(this.input.scrollHeight / 24));
       this.input.rows = Math.max(1, lines);
       this.positionSuggestionsDropdown();
+      this.updateInputLineNumbers();
     });
   }
 
@@ -517,6 +548,16 @@ export class ChatTerminal {
     }
 
     if (!this.selectedCell) return;
+    // Allow Ctrl+C to stop the running command for the selected cell; otherwise ignore
+    if (e.ctrlKey && !e.metaKey && !e.altKey && key === 'c') {
+      const ctx = this.selectedCell.__smrtContext || null;
+      const isCurrentRunning = this.isCommandRunning && this.currentCommand?.cellContext === ctx;
+      if (isCurrentRunning) {
+        e.preventDefault();
+        this.handleStopRequest(ctx);
+      }
+      return;
+    }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
 
     if (key === 'd') {
@@ -606,6 +647,7 @@ export class ChatTerminal {
       this.addMarkdownCell(markdownContent);
       this.input.value = '';
       this.input.rows = 1;
+      this.updateInputLineNumbers();
       this.hideSuggestions();
       this.input.focus();
       this.scrollToBottom();
@@ -630,12 +672,16 @@ export class ChatTerminal {
     // Update command statistics for smart suggestions
     this.updateCommandStats(command);
 
-    // Display user command message and capture cell context
-    const cellContext = this.addUserMessage(command, { startEditing: true });
+    // Display user command message but do NOT enter edit mode.
+    // For freshly executed commands, we want to keep focus in the composer
+    // and immediately run the command; editing the just-added cell is noisy
+    // (and races with run state toggling).
+    const cellContext = this.addUserMessage(command, { startEditing: false, selectCell: false });
 
     // Clear input
     this.input.value = '';
     this.input.rows = 1;
+    this.updateInputLineNumbers();
     this.input.focus();
 
     // Hide command suggestions if visible
@@ -753,7 +799,8 @@ export class ChatTerminal {
       insertBefore = null,
       insertAfter = null,
       replace = null,
-      startEditing = false
+      startEditing = false,
+      selectCell: shouldSelectCell = true
     } = options || {};
 
     const { cellEl, cellContext } = this.cellManager.createCommandCell(command, options);
@@ -774,7 +821,9 @@ export class ChatTerminal {
       parent.appendChild(cellEl);
     }
 
-    this.selectCell(cellEl);
+    if (shouldSelectCell) {
+      this.selectCell(cellEl);
+    }
     this.updateInputAffordances();
 
     // Check if this is part of a rerun operation
@@ -796,9 +845,47 @@ export class ChatTerminal {
 
     this.updateCollapseState(cellContext);
     this.updateControlButtonStates(cellContext);
+    // Ensure the command cell shows line numbers like output does
+    try { this.updateCellInputLineNumbers(cellContext); } catch (_) {}
     this.markDirty();
 
     return cellContext;
+  }
+
+  // Update the line-number gutter for the main textarea input
+  updateInputLineNumbers() {
+    const gutter = this.inputLineNumbersEl;
+    const input = this.input;
+    if (!gutter || !input) return;
+    const value = typeof input.value === 'string' ? input.value : '';
+    const count = Math.max(1, value.split('\n').length);
+    // Minimize DOM churn: rebuild simple list each time (inputs are small)
+    const frag = document.createDocumentFragment();
+    for (let i = 1; i <= count; i += 1) {
+      const div = document.createElement('div');
+      div.className = 'gutter-line';
+      div.textContent = String(i);
+      frag.appendChild(div);
+    }
+    gutter.innerHTML = '';
+    gutter.appendChild(frag);
+  }
+
+  // Update the line-number gutter for a history command cell
+  updateCellInputLineNumbers(cellContext) {
+    const ctx = cellContext || null;
+    if (!ctx || !ctx.commandPre || !ctx.commandGutter) return;
+    const text = ctx.commandPre.textContent || '';
+    const count = Math.max(1, text.split('\n').length);
+    const frag = document.createDocumentFragment();
+    for (let i = 1; i <= count; i += 1) {
+      const div = document.createElement('div');
+      div.className = 'gutter-line';
+      div.textContent = String(i);
+      frag.appendChild(div);
+    }
+    ctx.commandGutter.innerHTML = '';
+    ctx.commandGutter.appendChild(frag);
   }
 
   addMarkdownCell(markdownText, options = {}) {
@@ -900,6 +987,8 @@ export class ChatTerminal {
       const inputHandler = () => {
         // Hide suggestions when cell editor content changes
         this.hideSuggestions();
+        // Update per-line numbers in the gutter
+        try { this.updateCellInputLineNumbers(cellContext); } catch (_) {}
       };
 
       // Paste handler for contentEditable command editor (history cell).
@@ -1041,17 +1130,37 @@ export class ChatTerminal {
     this.selectCell(cellContext.cellEl);
     editor.classList.add('editing');
 
-    const selection = window.getSelection();
-    if (selection) {
-      selection.removeAllRanges();
-      const range = document.createRange();
-      range.selectNodeContents(editor);
-      range.collapse(false);
-      selection.addRange(range);
-    }
+    // Safely place caret at end of the contentEditable editor.
+    // In rare cases the editor may not yet be attached to the live document
+    // (e.g., during fast DOM updates), which causes selection.addRange to
+    // throw "The given range isn't in document.". Guard against that so
+    // executing a command never breaks the UI flow.
+    const placeCaret = () => {
+      try {
+        if (!document.contains(editor)) {
+          // If not in document yet, try again on next frame.
+          if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(placeCaret);
+          }
+          return;
+        }
+        const sel = window.getSelection?.();
+        if (sel) {
+          sel.removeAllRanges();
+          const range = document.createRange();
+          range.selectNodeContents(editor);
+          range.collapse(false);
+          sel.addRange(range);
+        }
+      } catch (err) {
+        // Swallow selection errors; caret placement is best-effort.
+        this.dbg?.('startCommandEdit selection error', err);
+      }
+      try { editor.focus(); } catch (_) {}
+    };
 
     cellContext.editing = true;
-    editor.focus();
+    placeCaret();
   }
 
   finishCommandEdit(cellContext, newCommand, shouldRun) {
@@ -1144,7 +1253,7 @@ export class ChatTerminal {
 
   attachControlHandlers(cellContext) {
     if (!cellContext) return;
-    const { stopButton, copyButton } = cellContext;
+    const { stopButton, copyButton, followButton } = cellContext;
 
     if (stopButton) {
       if (stopButton.__smrtClickHandler) {
@@ -1170,6 +1279,29 @@ export class ChatTerminal {
       };
       copyButton.__smrtClickHandler = handler;
       copyButton.addEventListener('click', handler);
+    }
+
+    if (followButton) {
+      if (followButton.__smrtClickHandler) {
+        followButton.removeEventListener('click', followButton.__smrtClickHandler);
+      }
+      const handler = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        cellContext.autoFollow = !cellContext.autoFollow;
+        followButton.classList.toggle('active', !!cellContext.autoFollow);
+        // If enabling follow while collapsed and has output, jump to bottom immediately
+        if (cellContext.autoFollow && cellContext.collapsed) {
+          const preEl = this.currentCommand?.cellContext === cellContext
+            ? this.currentCommand?.outputPre
+            : (cellContext.outputContent?.querySelector('.cell-output-text') || null);
+          if (preEl && typeof preEl.scrollHeight === 'number') {
+            preEl.scrollTop = preEl.scrollHeight - preEl.clientHeight;
+          }
+        }
+      };
+      followButton.__smrtClickHandler = handler;
+      followButton.addEventListener('click', handler);
     }
   }
 
@@ -1201,20 +1333,36 @@ export class ChatTerminal {
       const mode = tabState?.mode || 'pty';
 
       if (mode === 'pty') {
-        // PTY mode: Send Ctrl+C and wait for response
+        // PTY mode: graceful stop; keep UI running until我们确认提示符返回
         this.dbg('PTY mode: Sending Ctrl+C');
         this.sendInterruptSignal();
 
-        // Wait 1 second for the command to respond to Ctrl+C
-        this.currentCommand.terminationTimer = setTimeout(() => {
-          if (this.currentCommand && this.isCommandRunning) {
-            this.dbg('Command did not respond to Ctrl+C, force finalizing');
+        const startTs = Date.now();
+        const MAX_WAIT = 5000;
+        const CHECK_EVERY = 150;
+        const pollForPrompt = async () => {
+          const cmd = this.currentCommand;
+          if (!cmd || !this.isCommandRunning || cmd.cellContext !== cellContext) return; // 已被其他路径结束
+          const hasPrompt = this.detectShellPrompt(cmd.promptBuffer);
+          if (hasPrompt) {
+            this.dbg('Prompt detected after stop; finalizing');
+            try { this._renderCurrentCommandOutput(cellContext, false); } catch (_) {}
             this.finalizeCommandOutput();
-            this.setCommandRunning(false, cellContext);
-            this.currentCommand = null;
-            this.processCommandQueue();
+            return;
           }
-        }, 1000);
+          if (Date.now() - startTs > MAX_WAIT) {
+            this.dbg('Stop wait timeout; try another Ctrl+C then finalize UI');
+            try {
+              this.sendInterruptSignal();
+              const ptyId = cmd?.ptyId; if (ptyId) { try { await sm.term.write({ ptyId, data: '\r' }); } catch (_) {} }
+            } catch (_) {}
+            try { this._renderCurrentCommandOutput(cellContext, false); } catch (_) {}
+            this.finalizeCommandOutput();
+            return;
+          }
+          setTimeout(pollForPrompt, CHECK_EVERY);
+        };
+        setTimeout(pollForPrompt, CHECK_EVERY);
       } else {
         // stdio mode: Ctrl+C doesn't work reliably, force kill immediately
         this.dbg('stdio mode: Force killing PTY');
@@ -1283,10 +1431,12 @@ export class ChatTerminal {
     if (!cellContext) return;
     const stopButton = cellContext.stopButton;
     const copyButton = cellContext.copyButton;
+    const followButton = cellContext.followButton;
     const controlRow = cellContext.controlRow;
 
     const isRunning = this.isCommandRunning && this.currentCommand?.cellContext === cellContext;
     const hasOutput = !!cellContext.outputContent?.querySelector('.cell-output-text');
+    const isCollapsed = !!cellContext.collapsed;
 
     if (stopButton) {
       stopButton.disabled = !isRunning;
@@ -1295,6 +1445,12 @@ export class ChatTerminal {
     if (copyButton) {
       copyButton.disabled = !hasOutput;
       copyButton.classList.toggle('active', hasOutput);
+    }
+    if (followButton) {
+      const visible = isRunning && isCollapsed;
+      followButton.classList.toggle('hidden', !visible);
+      followButton.disabled = !visible;
+      followButton.classList.toggle('active', !!cellContext.autoFollow);
     }
     if (controlRow) {
       controlRow.classList.toggle('is-running', isRunning);
@@ -1382,16 +1538,24 @@ export class ChatTerminal {
     this.removeCellElement(cell);
   }
 
-  removeCellElement(cell) {
+  removeCellElement(cell, options = {}) {
     if (!cell) return;
+    const { preserveScroll = true } = options || {};
     if (this.pendingDeletionCells?.has(cell)) {
       this.pendingDeletionCells.delete(cell);
     }
     if (cell === this.selectedCell) {
       this.selectedCell = null;
     }
+    const container = this.container || null;
+    const prevScrollTop = preserveScroll && container ? container.scrollTop : null;
     this.cellManager.removeCellElement(cell);
-    this.scrollToBottom();
+    if (preserveScroll && container && prevScrollTop != null) {
+      // Restore prior scroll position to avoid jumping to bottom
+      requestAnimationFrame(() => { container.scrollTop = prevScrollTop; });
+    } else {
+      this.scrollToBottom();
+    }
   }
 
   setupMarkdownEditing(cellEl, markdownText) {
@@ -1540,7 +1704,7 @@ export class ChatTerminal {
     // Don't auto-scroll for rerun commands
     const fromRerun = this.currentCommand?.fromRerun || false;
     if (!fromRerun) {
-      this.scrollToBottom();
+      if (this.isNearBottom()) this.scrollToBottom();
     }
 
     this.updateControlButtonStates(cellContext);
@@ -1727,7 +1891,7 @@ export class ChatTerminal {
 
       this.dbg('Executing command with PTY mode:', { ptyId, command });
 
-      // 检测是否为交互式命令
+      // 检测是否为交互式命令（基于命令字符串的“显式判断”）
       const isInteractiveCommand = /^\s*(ssh|telnet|nc|netcat|mysql|psql|mongo|redis-cli|python|node|irb|rails\s+console)\s+/i.test(command);
 
       // If this is an ssh command, try to capture the target for later SCP fallback
@@ -1753,10 +1917,18 @@ export class ChatTerminal {
         outputPre: null,
         exitCode: null,
         fromRerun,
+        // 是否交互式：初始为“显式判断”（命令本身），后续可能被运行时启发式提升为 true
         isInteractive: isInteractiveCommand,
+        // 标记交互式来源：显式/启发式
+        isInteractiveExplicit: isInteractiveCommand,
+        isInteractiveHeuristic: false,
         sentinelId: isInteractiveCommand ? null : sentinelId,
         promptBuffer: '',
-        sentinelCaptured: false
+        sentinelCaptured: false,
+        altScreenActive: false,
+        syncOutputActive: false,
+        tuiSuppressedBytes: 0,
+        tuiSuppressedShown: false
       };
 
       if (cellContext?.outputPrompt) {
@@ -1849,12 +2021,23 @@ export class ChatTerminal {
     if (!cellContext || !cellContext.outputRow) return;
     cellContext.collapsed = !cellContext.collapsed;
     this.updateCollapseState(cellContext);
+    this.updateControlButtonStates(cellContext);
+    // Persist immediately so collapse/expand survives app crashes or
+    // quick quits; still markDirty to keep other listeners informed.
+    try { if (typeof this.requestPersist === 'function') this.requestPersist(); } catch (_) {}
+    this.markDirty();
   }
 
   updateCollapseState(cellContext) {
     if (!cellContext || !cellContext.outputRow) return;
     const collapsed = !!cellContext.collapsed;
     cellContext.outputRow.classList.toggle('collapsed', collapsed);
+    if (cellContext.cellEl) {
+      cellContext.cellEl.dataset.outputCollapsed = collapsed ? '1' : '0';
+    }
+    if (cellContext.outputRow) {
+      cellContext.outputRow.dataset.collapsed = collapsed ? '1' : '0';
+    }
   }
 
   rehydrateCells() {
@@ -1958,32 +2141,15 @@ export class ChatTerminal {
   updateOutputPreText(preEl, text) {
     if (!preEl) return;
     const normalized = typeof text === 'string' ? text : String(text ?? '');
+    // Always write content; even if cleaned text is identical, the raw stream may still be progressing
+    // and users expect visible activity. textContent updates are cheap enough.
     preEl.dataset.rawOutput = normalized;
+
+    // Always use simple textContent rendering for performance
     preEl.innerHTML = '';
-
-    const lines = normalized.split('\n');
-    const lineCount = lines.length > 0 ? lines.length : 1;
-    const fragment = document.createDocumentFragment();
-
-    for (let i = 0; i < lineCount; i += 1) {
-      const lineText = lines[i] ?? '';
-      const lineWrapper = document.createElement('div');
-      lineWrapper.className = 'cell-output-line';
-
-      const numberEl = document.createElement('span');
-      numberEl.className = 'cell-output-line-number';
-      numberEl.textContent = String(i + 1);
-
-      const textEl = document.createElement('span');
-      textEl.className = 'cell-output-line-text';
-      textEl.textContent = lineText === '' ? '\u00A0' : lineText;
-
-      lineWrapper.append(numberEl, textEl);
-      fragment.appendChild(lineWrapper);
-    }
-
-    preEl.appendChild(fragment);
+    preEl.textContent = normalized;
   }
+
 
   renderMarkdown(markdownText) {
     return this.markdownRenderer.renderMarkdown(markdownText);
@@ -2026,6 +2192,129 @@ export class ChatTerminal {
     this.updateInputPrompt();
   }
 
+  // Fast pre-cleaning of control/ANSI/OSC for display buffer to reduce render work
+  preCleanChunk(chunk) {
+    if (!chunk) return '';
+    try {
+      let t = String(chunk);
+      // Normalize CRLF/CR to \n
+      t = t.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      // Remove OSC sequences: ESC ] ... (BEL or ST)
+      t = t.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '');
+      // Remove ANSI/CSI sequences (colors, cursor moves, etc.)
+      const ansi = /(?:\u001b\[|\u009b)[0-?]*[ -\/]*[@-~]|\u001b[ -\/]*[\d@-~<>=?]/g;
+      t = t.replace(ansi, '');
+      // Remove DCS-style sequences ESC P ... ESC \\
+      t = t.replace(/\u001b[PX^_][\s\S]*?\u001b\\/g, '');
+      // Remove control chars except newline
+      t = t.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, (ch) => (ch === '\n' ? '\n' : ''));
+      return t;
+    } catch (_) {
+      return typeof chunk === 'string' ? chunk : String(chunk ?? '');
+    }
+  }
+
+  // Compute the cleaned text used for DOM display, capped to a tail slice
+  getDisplayCleanOutput(output, command) {
+    try {
+      let truncated = false;
+      let slice = typeof output === 'string' ? output : String(output ?? '');
+      if (slice.length > this._displayCap) {
+        truncated = true;
+        slice = slice.slice(-this._displayCap);
+      }
+      let clean = this._outputIsSanitized ? slice : this.cleanTerminalOutput(slice, command);
+      // Soft-wrap very long single lines to avoid expensive layout on huge unbroken lines
+      if (this._maxVisualLineLen && this._maxVisualLineLen > 0) {
+        try {
+          const parts = clean.split('\n');
+          for (let i = 0; i < parts.length; i += 1) {
+            const line = parts[i];
+            if (line && line.length > this._maxVisualLineLen) {
+              const chunks = [];
+              for (let j = 0; j < line.length; j += this._maxVisualLineLen) {
+                chunks.push(line.slice(j, j + this._maxVisualLineLen));
+              }
+              parts[i] = chunks.join('\n');
+            }
+          }
+          clean = parts.join('\n');
+        } catch (_) { /* ignore wrapping errors */ }
+      }
+      if (truncated) clean = '\u2026 truncated \u2026\n' + clean; // leading hint
+      return clean;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  // Render the current command's output immediately (single DOM update)
+  _renderCurrentCommandOutput(cellContext, fromRerun) {
+    if (!this.currentCommand) return;
+    const cleanOutput = this.getDisplayCleanOutput(this.currentCommand.output, this.currentCommand.command);
+    if (!this.currentCommand.outputPre) {
+      const preEl = this.renderCellOutput(cellContext, cleanOutput);
+      this.currentCommand.outputPre = preEl;
+      if (!cellContext?.collapsed && !fromRerun) {
+        if (this.isNearBottom()) this.scrollToBottom();
+      }
+    } else {
+      const preEl = this.currentCommand.outputPre;
+      let prevScrollTop = 0;
+      if (cellContext?.collapsed) prevScrollTop = preEl.scrollTop;
+      this.updateOutputPreText(preEl, cleanOutput);
+      if (cellContext?.collapsed) {
+        if (cellContext.autoFollow) {
+          preEl.scrollTop = preEl.scrollHeight - preEl.clientHeight;
+        } else {
+          preEl.scrollTop = prevScrollTop;
+        }
+      } else if (!fromRerun) {
+        if (this.isNearBottom()) this.scrollToBottom();
+      }
+      this.updateControlButtonStates(cellContext);
+    }
+  }
+
+  isNearBottom(pixels = 200) {
+    try {
+      const c = this.container;
+      if (!c) return false;
+      const delta = (c.scrollHeight - c.clientHeight - c.scrollTop);
+      return delta <= pixels;
+    } catch (_) { return false; }
+  }
+
+  // Schedule a render on the next animation frame (coalesces bursts)
+  _scheduleOutputRender(cellContext, fromRerun) {
+    if (this._pendingRender) return;
+    this._pendingRender = true;
+    const flush = () => {
+      if (!this._pendingRender) return;
+      this._pendingRender = false;
+      if (this._pendingRAF) { cancelAnimationFrame?.(this._pendingRAF); this._pendingRAF = null; }
+      if (this._pendingTO) { clearTimeout(this._pendingTO); this._pendingTO = null; }
+      this._lastRenderTS = Date.now();
+      try { this._renderCurrentCommandOutput(cellContext, fromRerun); } catch (_) {}
+      // Reset accumulated byte counter after a paint
+      this._accBytesSincePaint = 0;
+    };
+    // Throttle: if last paint was too recent, delay to respect min interval
+    const since = Date.now() - (this._lastRenderTS || 0);
+    const needDelay = Number.isFinite(this._minRenderIntervalMs) && since < this._minRenderIntervalMs;
+    if (needDelay) {
+      const delay = Math.max(0, this._minRenderIntervalMs - since);
+      this._pendingTO = setTimeout(flush, delay);
+      return;
+    }
+    // Prefer rAF for visible, smooth paints
+    if (typeof requestAnimationFrame === 'function' && !document.hidden) {
+      this._pendingRAF = requestAnimationFrame(flush);
+    }
+    // Always arm a fallback timeout, in case rAF is throttled/hidden
+    this._pendingTO = setTimeout(flush, this._flushFallbackMs);
+  }
+
   handleTerminalOutput(data) {
     // If there's no current command but there are queued commands, start processing
     if (!this.currentCommand) {
@@ -2037,11 +2326,11 @@ export class ChatTerminal {
         if (timeSinceFinalize < 5000) {
           this.dbg('Appending trailing output to finalized command', { bytes: data.length });
           this.lastFinalizedCommand.output += data;
-          const cleanOutput = this.cleanTerminalOutput(
+          const cleanTail = this.getDisplayCleanOutput(
             this.lastFinalizedCommand.output,
             this.lastFinalizedCommand.command
           );
-          this.updateOutputPreText(this.lastFinalizedCommand.outputPre, cleanOutput);
+          this.updateOutputPreText(this.lastFinalizedCommand.outputPre, cleanTail);
 
           // Update the cell context if available
           if (this.lastFinalizedCommand.cellContext) {
@@ -2064,12 +2353,38 @@ export class ChatTerminal {
       }
     }
 
-    this.dbg('data chunk', { bytes: (typeof data === 'string' ? data.length : 0) });
-    if (this.debugEnabled && typeof data === 'string') {
-      this.dbg('chunk preview', this.formatDebugPreview(data));
+    const rawChunk = (typeof data === 'string' ? data : '');
+    this.dbg('data chunk', { bytes: rawChunk.length });
+    if (this.debugEnabled && rawChunk) {
+      this.dbg('chunk preview', this.formatDebugPreview(rawChunk));
     }
-    // No noDataFallbackTimer to clear - removed timeout logic
-    this.currentCommand.output += data;
+    // Decide whether to suppress output during alt-screen/sync-output
+    const entersAltOrSync = /\x1b\[\?1049h|\x1b\[\?47h|\x1b\[\?2026h/.test(rawChunk);
+    const leavesAltOrSync = /\x1b\[\?1049l|\x1b\[\?47l|\x1b\[\?2026l/.test(rawChunk);
+    const inAltOrSyncNow = (this.currentCommand.altScreenActive || this.currentCommand.syncOutputActive || entersAltOrSync) && !leavesAltOrSync;
+    let displayChunk = '';
+    if (!inAltOrSyncNow) {
+      // Pre-clean control/ANSI for display buffer to reduce render work
+      displayChunk = this.preCleanChunk(rawChunk);
+      // Append sanitized chunk to output buffer
+      this.currentCommand.output += displayChunk;
+      this._outputIsSanitized = true;
+    } else {
+      // Suppress TUI/alt-screen garbage in visible output; show a small placeholder instead
+      this.currentCommand.tuiSuppressedBytes = (this.currentCommand.tuiSuppressedBytes || 0) + rawChunk.length;
+      const bytes = this.currentCommand.tuiSuppressedBytes;
+      const note = `(interactive screen output suppressed… ${bytes} bytes)`;
+      if (!this.currentCommand.outputPre) {
+        const preEl = this.renderCellOutput(this.currentCommand.cellContext, note);
+        this.currentCommand.outputPre = preEl;
+      } else {
+        this.updateOutputPreText(this.currentCommand.outputPre, note);
+      }
+    }
+    // Cap buffer to avoid unbounded growth
+    if (this.currentCommand.output.length > this._bufferCap) {
+      this.currentCommand.output = this.currentCommand.output.slice(-this._bufferCap);
+    }
     const cellContext = this.currentCommand.cellContext;
     if (cellContext?.outputPrompt) {
       const idx = cellContext.outputPrompt.dataset.index;
@@ -2078,7 +2393,10 @@ export class ChatTerminal {
     if (typeof this.currentCommand.promptBuffer !== 'string') {
       this.currentCommand.promptBuffer = '';
     }
-    this.currentCommand.promptBuffer += data;
+    // Keep prompt buffer lightweight (sanitized) to aid prompt detection when not suppressed
+    if (displayChunk) {
+      this.currentCommand.promptBuffer += displayChunk;
+    }
 
     // Removed 2s timeout to allow commands to run indefinitely until completion
     // Commands will now wait for actual completion or error, not timeout prematurely
@@ -2097,43 +2415,58 @@ export class ChatTerminal {
       this.currentCommand.promptBuffer = this.currentCommand.promptBuffer.slice(-4000);
     }
 
-    const cleanOutput = this.cleanTerminalOutput(this.currentCommand.output, this.currentCommand.command);
-    if (this.debugEnabled) {
-      this.dbg('clean output preview', this.formatDebugPreview(cleanOutput));
-    }
-
     // Check if this is a rerun command
     const fromRerun = this.currentCommand.fromRerun || false;
 
+    // Runtime interactive detection: alt-screen, bracketed paste, hidden cursor, synchronized output
+    if (!isInteractiveCommand) {
+      const chunk = typeof data === 'string' ? data : '';
+      const looksInteractive = /\x1b\[\?1049[h|l]|\x1b\[\?47[h|l]|\x1b\[\?2004h|\x1b\[\?2026h|\x1b\[\?25l|--\s*More\s*--|Press\s+(enter|return)\s+to\s+continue/i.test(chunk);
+      if (looksInteractive) {
+        // Mark as interactive but do NOT finalize immediately; keep streaming until prompt/exit
+        this.dbg('interactive patterns detected; switching current command to interactive (streaming)');
+        this.currentCommand.isInteractive = true;
+        this.currentCommand.isInteractiveHeuristic = true;
+      }
+    }
+
     if (!this.currentCommand.outputPre) {
       this.removeLoadingMessage(this.currentCommand.loadingEl);
-      const preEl = this.renderCellOutput(cellContext, cleanOutput);
-      this.currentCommand.outputPre = preEl;
-      if (!cellContext?.collapsed && !fromRerun) {
-        this.scrollToBottom();
+    }
+    // Coalesced, capped rendering: only schedule when we have a newline or enough data
+    try {
+      const chunkStr = typeof data === 'string' ? data : '';
+      this._accBytesSincePaint += chunkStr.length;
+      const hasNewline = /\n|\r/.test(chunkStr);
+      const largeBurst = this._accBytesSincePaint >= (this._renderByteThreshold || 4096);
+      if (hasNewline || largeBurst) {
+        this._scheduleOutputRender(cellContext, fromRerun);
       }
-    } else if (this.currentCommand.outputPre) {
-      const preEl = this.currentCommand.outputPre;
-      let prevScrollTop = 0;
-      if (cellContext?.collapsed) {
-        prevScrollTop = preEl.scrollTop;
-      }
-      this.updateOutputPreText(preEl, cleanOutput);
-      if (cellContext?.collapsed) {
-        preEl.scrollTop = prevScrollTop;
-      } else if (!fromRerun) {
-        this.scrollToBottom();
-      }
-      this.updateControlButtonStates(cellContext);
+    } catch (_) {
+      // Fallback: always render if detection fails
+      this._scheduleOutputRender(cellContext, fromRerun);
     }
 
     if (sentinelTriggered) {
-      // No timeout timers to clear - removed timeout logic
+      // Ensure the latest chunk is painted before finalizing
+      try { this._renderCurrentCommandOutput(cellContext, fromRerun); } catch (_) {}
       this.finalizeCommandOutput();
       return;
     }
 
+    // Track alt-screen/sync-output toggles to avoid false prompt detection
+    try {
+      const chunk = typeof data === 'string' ? data : '';
+      if (!this.currentCommand.altScreenActive) this.currentCommand.altScreenActive = false;
+      if (!this.currentCommand.syncOutputActive) this.currentCommand.syncOutputActive = false;
+      if (/\x1b\[\?1049h|\x1b\[\?47h/.test(chunk)) this.currentCommand.altScreenActive = true;
+      if (/\x1b\[\?1049l|\x1b\[\?47l/.test(chunk)) this.currentCommand.altScreenActive = false;
+      if (/\x1b\[\?2026h/.test(chunk)) this.currentCommand.syncOutputActive = true;
+      if (/\x1b\[\?2026l/.test(chunk)) this.currentCommand.syncOutputActive = false;
+    } catch (_) {}
+
     // For interactive commands, finalize after seeing substantial output AND detecting a prompt
+    // and only when not in alt-screen/sync-output modes
     // This allows the user to interact with the remote shell
     // Check for both output length and prompt detection to ensure connection is established
     if (isInteractiveCommand) {
@@ -2143,31 +2476,49 @@ export class ChatTerminal {
       const hasSubstantialOutput = this.currentCommand.output.length > 100;
       const hasPrompt = this.detectShellPrompt(this.currentCommand.promptBuffer);
 
-      if (hasSubstantialOutput && hasPrompt) {
+      const inAlt = !!this.currentCommand.altScreenActive || !!this.currentCommand.syncOutputActive;
+      if (hasSubstantialOutput && hasPrompt && !inAlt) {
         this.dbg('interactive command ready: output + prompt detected');
         if (this.pendingSshTarget) {
           this.activeSshTarget = this.pendingSshTarget;
           this.dbg('ssh active target set:', this.activeSshTarget);
+          try {
+            if (this.pathCompleter && typeof this.pathCompleter.setRemoteContext === 'function') {
+              this.pathCompleter.setRemoteContext({ type: 'ssh', target: this.activeSshTarget });
+            }
+          } catch (_) {}
         }
         this.finalizeCommandOutput();
         return;
       }
 
       // Fallback: if we have a lot of output but no clear prompt, finalize anyway
-      // This handles cases where the remote prompt pattern is unusual
+      // 仅对“显式交互式命令”（如 ssh 等）启用，以避免对启发式判定的命令（如 codex resume）误判终止
       if (this.currentCommand.output.length > 500) {
-        this.dbg('interactive command: substantial output, finalizing');
-        this.finalizeCommandOutput();
-        return;
+        const explicit = !!this.currentCommand.isInteractiveExplicit;
+        if (!inAlt && explicit) {
+          this.dbg('interactive command: substantial output, finalizing');
+          this.finalizeCommandOutput();
+          return;
+        }
       }
     }
 
     // For non-interactive commands, detect when the shell prompt returns
-    if (!isInteractiveCommand && this.detectShellPrompt(this.currentCommand.promptBuffer)) {
-      this.dbg('prompt detected');
-      // No timeout timers to clear - removed timeout logic
-      this.finalizeCommandOutput();
-    }
+    if (!isInteractiveCommand && !this.currentCommand?.altScreenActive && !this.currentCommand?.syncOutputActive) {
+      const isSecondary = this.detectSecondaryPrompt(this.currentCommand.promptBuffer);
+      const isPrimary = !isSecondary && this.detectShellPrompt(this.currentCommand.promptBuffer);
+      if (isSecondary && !this.currentCommand._sentCancelForSecondary) {
+        // The shell is waiting for continuation (e.g., unmatched quotes). Abort to restore state.
+        this.dbg('secondary prompt detected (unmatched quotes/continuation) — sending Ctrl+C');
+        this.currentCommand._sentCancelForSecondary = true;
+        try { sm.term.write({ ptyId: this.currentCommand.ptyId, data: '\x03' }); } catch (_) {}
+      } else if (isPrimary) {
+        this.dbg('prompt detected');
+        try { this._renderCurrentCommandOutput(cellContext, fromRerun); } catch (_) {}
+        this.finalizeCommandOutput();
+      }
+  }
   }
 
   handlePromptReady() {
@@ -2188,7 +2539,7 @@ export class ChatTerminal {
 
     this.stripCommandSentinel();
 
-    const { output, command, cellContext, exitCode, outputPre } = this.currentCommand;
+    const { output, command, cellContext, exitCode, outputPre, _secondaryDetected } = this.currentCommand;
     this.dbg('finalize', { exitCode, outputBytes: output?.length || 0 });
 
     // Store reference to finalized command for trailing output
@@ -2200,15 +2551,17 @@ export class ChatTerminal {
       finalizeTime: Date.now()
     };
 
-    const cleanOutput = this.cleanTerminalOutput(output, command);
+    let cleanOutput = this.cleanTerminalOutput(output, command);
+    if (_secondaryDetected) {
+      const note = '\n[terminated] Detected continuation prompt (likely unmatched quotes). Sent Ctrl+C to restore shell.\n';
+      cleanOutput = cleanOutput ? (cleanOutput + note) : note;
+    }
     if (cellContext?.outputPrompt) {
       cellContext.outputPrompt.textContent = `Out [${cellContext.outputPrompt.dataset.index}]:`;
     }
     const exitCodeKnown = Number.isInteger(exitCode);
-    const cleanLower = cleanOutput.toLowerCase();
-    const heuristicError = cleanLower.includes('error') ||
-                    cleanLower.includes('command not found');
-    const isError = exitCodeKnown ? exitCode !== 0 : heuristicError;
+    // Only trust real exit code; text heuristics cause false positives
+    const isError = exitCodeKnown ? exitCode !== 0 : false;
 
     if (cellContext?.outputPrompt) {
       const idx = cellContext.outputPrompt.dataset.index;
@@ -2225,7 +2578,7 @@ export class ChatTerminal {
       }
       this.updateOutputPreText(preEl, cleanOutput);
       if (cellContext?.collapsed) {
-        if (preEl.dataset.autoScroll === '1') {
+        if (cellContext.autoFollow || preEl.dataset.autoScroll === '1') {
           preEl.scrollTop = preEl.scrollHeight - preEl.clientHeight;
         } else {
           preEl.scrollTop = prevScrollTop;
@@ -2261,6 +2614,8 @@ export class ChatTerminal {
     this.processCommandQueue();
   }
 
+  // Detect whether the shell shows a primary prompt (ready) or a secondary/continuation prompt (e.g., unmatched quotes)
+  // Returns true for primary prompt only; helper detectSecondaryPrompt() handles continuation prompts
   detectShellPrompt(buffer) {
     if (!buffer) return false;
 
@@ -2301,16 +2656,38 @@ export class ChatTerminal {
     }
 
     // Fallback detection for prompts ending with common indicator symbols
-    const promptIndicators = /[#$%❯»➜➤➟▶▸▹⟫⟩λƒ>‹›❮❯]$/;
+    const promptIndicators = /[#$%❯»➜➤➟▶▸▹⟫⟩λƒ›❮❯]$/; // exclude bare '>' to avoid matching PS2
     if (promptIndicators.test(lastLine)) {
       return true;
     }
 
-    // Handle prompts that end with indicator followed by a space (e.g., "➜ ")
-    if (/[#$%❯»➜➤➟▶▸▹⟫⟩>]\s*$/.test(lastLine)) {
+    // Handle prompts that end with indicator followed by a space (e.g., "➜ ") but avoid bare "> "
+    if (/[#$%❯»➜➤➟▶▸▹⟫⟩]\s*$/.test(lastLine)) {
       return true;
     }
 
+    return false;
+  }
+
+  // Secondary/continuation prompt detection (bash/zsh typical PS2: "> ", "quote>", "dquote>", "heredoc>")
+  detectSecondaryPrompt(buffer) {
+    if (!buffer) return false;
+    const sanitized = buffer
+      .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '')
+      .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+      .replace(/\r/g, '')
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, (ch) => (ch === '\n' ? '\n' : ''));
+    if (!sanitized) return false;
+    const lines = sanitized.split('\n');
+    let last = '';
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const s = lines[i];
+      if (s && s.trim().length > 0) { last = s; break; }
+    }
+    if (!last) return false;
+    const trimmed = last.trim();
+    if (trimmed === '>') return true; // very common PS2
+    if (/\b(?:quote|dquote|bquote|heredoc)>\s*$/.test(trimmed)) return true;
     return false;
   }
 
@@ -2350,10 +2727,12 @@ export class ChatTerminal {
       const idx = ctx.controlPrompt.dataset.index;
       ctx.controlPrompt.textContent = isRunning ? 'Ctl [*]:' : (idx ? `Ctl [${idx}]:` : 'Ctl [ ]:');
     }
+    let removedDueToPendingDeletion = false;
     if (ctx) {
       this.updateControlButtonStates(ctx);
       if (!isRunning && ctx.cellEl && this.pendingDeletionCells?.has(ctx.cellEl)) {
-        this.removeCellElement(ctx.cellEl);
+        this.removeCellElement(ctx.cellEl, { preserveScroll: true });
+        removedDueToPendingDeletion = true;
       }
     }
 
@@ -2369,7 +2748,7 @@ export class ChatTerminal {
 
     // For rerun commands, don't scroll at all - stay in current position
     // For new commands, scroll to bottom
-    if (!ctx?.collapsed && !fromRerun) {
+    if (!ctx?.collapsed && !fromRerun && !removedDueToPendingDeletion) {
       this.scrollToBottom();
     }
 
@@ -2406,6 +2785,7 @@ export class ChatTerminal {
     // Clear input box
     this.input.value = '';
     this.input.rows = 1;
+    this.updateInputLineNumbers();
     this.commandBusyWarningShown = false;
     this.input.focus();
     this.scrollToBottom();
@@ -2478,7 +2858,8 @@ export class ChatTerminal {
     this.recordCommandHistory(originalCommand);
 
     // Create cell context with transfer mode
-    const cellContext = this.addUserMessage(originalCommand, { startEditing: true });
+    // For transfers, also avoid forcing edit mode on the created cell.
+    const cellContext = this.addUserMessage(originalCommand, { startEditing: false, selectCell: false });
 
     // Mark the cell with transfer mode
     if (cellContext && cellContext.cellEl) {
@@ -2489,6 +2870,7 @@ export class ChatTerminal {
     // Clear input
     this.input.value = '';
     this.input.rows = 1;
+    this.updateInputLineNumbers();
     this.input.focus();
 
     // Hide command suggestions
@@ -2795,7 +3177,8 @@ export class ChatTerminal {
 
     // Step 2: Remove the command echo line
     const escapedCmd = this.escapeRegExp(command);
-    clean = clean.replace(new RegExp(`^${escapedCmd}\\s*\\n`, ''), '');
+    // Avoid passing empty flags string to RegExp (Safari/WebKit can throw "missing /")
+    clean = clean.replace(new RegExp(`^${escapedCmd}\\s*\\n`), '');
 
     // Step 3: Remove ALL ANSI escape sequences (colors, cursor movements, etc.)
     // This must be done BEFORE trying to match prompts
@@ -3237,6 +3620,15 @@ export class ChatTerminal {
     // 1. Detect path context
     const pathContext = this.pathCompleter.detectPathContext(input, cursorPos);
     console.log('[Tab] Path context:', pathContext);
+
+    // If in an interactive SSH session, let path completer query remote fs
+    try {
+      const tabState = typeof this.getTabState === 'function' ? this.getTabState() : null;
+      const sshTarget = this.activeSshTarget || (tabState && tabState.sshTarget) || null;
+      if (this.pathCompleter && typeof this.pathCompleter.setRemoteContext === 'function') {
+        this.pathCompleter.setRemoteContext(sshTarget ? { type: 'ssh', target: sshTarget } : null);
+      }
+    } catch (_) {}
 
     if (pathContext) {
       // 2. Try path completion

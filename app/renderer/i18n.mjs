@@ -89,6 +89,15 @@ const translations = {
     'settings.font.apply': '应用',
     'settings.font.reset': '重置',
     'settings.back': '返回首页',
+    // Transfers
+    'settings.transfers': '文件传输',
+    'settings.transfers.downloads': '下载',
+    'settings.transfers.downloadsDir': '下载保存目录',
+    'settings.transfers.choose': '选择…',
+    'settings.transfers.hint': '默认保存到系统下载文件夹，可在此处修改。',
+    'settings.transfers.downloadsDir.placeholder': '~/Downloads',
+    'settings.save': '保存',
+    'settings.reset': '恢复默认',
 
     // Buttons
     'button.newTab': '新建对话',
@@ -101,6 +110,10 @@ const translations = {
     'input.command': '输入命令并按 Shift+Enter...',
     'input.description': '添加描述（支持 Markdown）...',
 
+    // Cell Input
+    'cell.input.placeholder': '输入命令，Shift+Enter 执行',
+    'cell.input.ariaLabel': '命令编辑框',
+
     // Messages
     'message.terminalInit': 'Terminal正在初始化，请稍候...',
     'message.tabClosed': '标签页已关闭',
@@ -111,6 +124,8 @@ const translations = {
     'cell.control.stop.title': '停止当前命令 (Ctrl+C)',
     'cell.control.copy': '复制',
     'cell.control.copy.title': '复制输出内容',
+    'cell.control.follow': '自动滚动',
+    'cell.control.follow.title': '执行中且折叠时，自动将回显滚动到底部',
 
     // Aria Labels
     'aria.scrollLeft': '向左滚动标签页',
@@ -208,6 +223,15 @@ const translations = {
     'settings.font.apply': 'Apply',
     'settings.font.reset': 'Reset',
     'settings.back': 'Back to Home',
+    // Transfers
+    'settings.transfers': 'Transfers',
+    'settings.transfers.downloads': 'Downloads',
+    'settings.transfers.downloadsDir': 'Save To',
+    'settings.transfers.choose': 'Choose…',
+    'settings.transfers.hint': 'Default to system Downloads folder. You can change it here.',
+    'settings.transfers.downloadsDir.placeholder': 'e.g., ~/Downloads',
+    'settings.save': 'Save',
+    'settings.reset': 'Reset to Default',
 
     // Buttons
     'button.newTab': 'New Session',
@@ -220,6 +244,10 @@ const translations = {
     'input.command': 'Type a command and press Shift+Enter...',
     'input.description': 'Add description (Markdown supported)...',
 
+    // Cell Input
+    'cell.input.placeholder': 'Type a command, Shift+Enter to run',
+    'cell.input.ariaLabel': 'Command editor',
+
     // Messages
     'message.terminalInit': 'Terminal is initializing, please wait...',
     'message.tabClosed': 'Tab closed',
@@ -230,6 +258,8 @@ const translations = {
     'cell.control.stop.title': 'Stop current command (Ctrl+C)',
     'cell.control.copy': 'Copy',
     'cell.control.copy.title': 'Copy output content',
+    'cell.control.follow': 'Follow',
+    'cell.control.follow.title': 'Auto-scroll to bottom while running and collapsed',
 
     // Aria Labels
     'aria.scrollLeft': 'Scroll tabs left',

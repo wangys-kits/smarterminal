@@ -74,6 +74,7 @@ export class CellManager {
     const cellId = this.cellIdCounter++;
     cellEl.dataset.cellId = cellId;
     cellEl.dataset.executionIndex = '';
+    cellEl.dataset.outputCollapsed = '0';
 
     // Add mode class to cell
     cellEl.classList.add(`mode-${mode}`);
@@ -88,16 +89,32 @@ export class CellManager {
     const inputContent = document.createElement('div');
     inputContent.className = 'cell-content';
 
+    // Editor area with a dedicated line-number gutter and the editable pre
+    const editorWrapper = document.createElement('div');
+    editorWrapper.className = 'cell-input-editor';
+
+    const commandGutter = document.createElement('div');
+    commandGutter.className = 'code-gutter cell-input-gutter';
+    commandGutter.setAttribute('aria-hidden', 'true');
+
     const commandPre = document.createElement('pre');
     commandPre.className = 'cell-input-text';
     commandPre.contentEditable = 'true';
     commandPre.textContent = normalizedCommand;
+    // Show a hint when the editor is empty to improve affordance
+    try {
+      const placeholder = i18n.t('cell.input.placeholder', '输入命令，Shift+Enter 执行');
+      commandPre.setAttribute('data-placeholder', placeholder);
+      commandPre.setAttribute('aria-label', i18n.t('cell.input.ariaLabel', '命令编辑框'));
+      commandPre.setAttribute('role', 'textbox');
+    } catch (_) { /* best-effort */ }
 
     const cellContext = {
       cellEl,
       cellId,
       command: normalizedCommand,
       commandPre,
+      commandGutter,
       inputPrompt,
       outputRow: null,
       outputContent: null,
@@ -108,11 +125,13 @@ export class CellManager {
       editing: false
     };
 
-    inputContent.appendChild(commandPre);
+    editorWrapper.append(commandGutter, commandPre);
+    inputContent.appendChild(editorWrapper);
     inputRow.append(inputPrompt, inputContent);
 
     const outputRow = document.createElement('div');
     outputRow.className = 'cell-row cell-output hidden';
+    outputRow.dataset.collapsed = '0';
 
     const outputPrompt = document.createElement('div');
     outputPrompt.className = 'cell-prompt';
@@ -153,6 +172,15 @@ export class CellManager {
     stopBtn.textContent = i18n.t('cell.control.stop', 'Stop');
     stopBtn.title = i18n.t('cell.control.stop.title', 'Stop current command (Ctrl+C)');
 
+    const followBtn = document.createElement('button');
+    followBtn.type = 'button';
+    followBtn.className = 'cell-control-btn control-follow';
+    followBtn.dataset.action = 'follow';
+    followBtn.disabled = true;
+    followBtn.textContent = i18n.t('cell.control.follow', 'Follow');
+    followBtn.title = i18n.t('cell.control.follow.title', 'Auto-scroll to bottom while running and collapsed');
+    followBtn.classList.add('hidden');
+
     const copyBtn = document.createElement('button');
     copyBtn.type = 'button';
     copyBtn.className = 'cell-control-btn control-copy';
@@ -161,7 +189,7 @@ export class CellManager {
     copyBtn.textContent = i18n.t('cell.control.copy', 'Copy');
     copyBtn.title = i18n.t('cell.control.copy.title', 'Copy output content');
 
-    controlContent.append(stopBtn, copyBtn);
+    controlContent.append(stopBtn, copyBtn, followBtn);
     controlRow.append(controlPrompt, controlContent);
 
     // Append rows; controlRow will be hidden via CSS for upload/download modes
@@ -177,7 +205,9 @@ export class CellManager {
     cellContext.controlRow = controlRow;
     cellContext.controlPrompt = controlPrompt;
     cellContext.stopButton = stopBtn;
+    cellContext.followButton = followBtn;
     cellContext.copyButton = copyBtn;
+    cellContext.autoFollow = false;
 
     cellEl.__smrtContext = cellContext;
 
@@ -276,10 +306,44 @@ export class CellManager {
         maxExecutionIndex = Math.max(maxExecutionIndex, execRaw);
       }
 
-      const commandPre = cellEl.querySelector('.cell-input-text');
+      let commandPre = cellEl.querySelector('.cell-input-text');
       if (commandPre) {
         commandPre.contentEditable = 'true';
+        // Ensure placeholder hint exists on legacy cells as well
+        try {
+          const placeholder = i18n.t('cell.input.placeholder', '输入命令，Shift+Enter 执行');
+          commandPre.setAttribute('data-placeholder', placeholder);
+          commandPre.setAttribute('aria-label', i18n.t('cell.input.ariaLabel', '命令编辑框'));
+          commandPre.setAttribute('role', 'textbox');
+        } catch (_) { /* best-effort */ }
       }
+      // Ensure legacy cells also get the editor wrapper and gutter
+      let commandGutter = null;
+      try {
+        const parent = commandPre?.parentElement;
+        const hasWrapper = parent && parent.classList.contains('cell-input-editor');
+        if (!hasWrapper && commandPre) {
+          const inputContent = cellEl.querySelector('.cell-row.cell-input .cell-content');
+          const wrapper = document.createElement('div');
+          wrapper.className = 'cell-input-editor';
+          const gutter = document.createElement('div');
+          gutter.className = 'code-gutter cell-input-gutter';
+          gutter.setAttribute('aria-hidden', 'true');
+          // Move the commandPre into wrapper
+          wrapper.append(gutter, commandPre);
+          if (inputContent) {
+            // If commandPre was already inside inputContent, remove it to avoid duplicate
+            if (commandPre.parentNode && commandPre.parentNode !== wrapper) {
+              try { commandPre.parentNode.removeChild(commandPre); } catch (_) {}
+            }
+            inputContent.appendChild(wrapper);
+          }
+          commandGutter = gutter;
+        } else {
+          commandGutter = cellEl.querySelector('.cell-input-gutter');
+        }
+      } catch (_) { /* best-effort */ }
+
       const command = commandPre ? commandPre.textContent : '';
       const outputRow = cellEl.querySelector('.cell-row.cell-output');
       const outputContent = outputRow ? outputRow.querySelector('.cell-content') : null;
@@ -319,6 +383,7 @@ export class CellManager {
       const controlRow = cellEl.querySelector('.cell-row.cell-controls');
       const controlPrompt = controlRow?.querySelector('.cell-prompt') || null;
       const stopButton = controlRow?.querySelector('.control-stop') || null;
+      const followButton = controlRow?.querySelector('.control-follow') || null;
       const copyButton = controlRow?.querySelector('.control-copy') || null;
 
       const cellContext = {
@@ -336,12 +401,22 @@ export class CellManager {
         controlRow,
         controlPrompt,
         stopButton,
+        followButton,
         copyButton,
-        collapsed: outputRow?.classList.contains('collapsed') || false,
+        commandGutter,
+        collapsed: (cellEl.dataset.outputCollapsed === '1') ||
+          (outputRow?.dataset?.collapsed === '1') ||
+          outputRow?.classList.contains('collapsed') || false,
         editing: false,
         timerInterval: null,
-        timerStart: null
+        timerStart: null,
+        autoFollow: false
       };
+
+      cellEl.dataset.outputCollapsed = cellContext.collapsed ? '1' : '0';
+      if (outputRow) {
+        outputRow.dataset.collapsed = cellContext.collapsed ? '1' : '0';
+      }
 
       if (Number.isFinite(execRaw)) {
         this.applyExecutionIndex(cellContext, execRaw);
@@ -350,6 +425,8 @@ export class CellManager {
       }
 
       cellEl.__smrtContext = cellContext;
+      // Populate line numbers for existing cells
+      try { this.chatTerminal?.updateCellInputLineNumbers(cellContext); } catch (_) {}
     });
 
     this.cellIdCounter = Math.max(this.cellIdCounter, maxCellId + 1);

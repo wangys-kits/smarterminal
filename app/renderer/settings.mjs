@@ -113,6 +113,10 @@ class SettingsManager {
     localStorage.setItem('smarterminal_theme', theme);
     this.applyTheme(theme);
     this.updateThemeSelection();
+    // Re-apply font settings so command/output colors adapt to new theme
+    this.applySavedFontSettings();
+    // Refresh settings inputs to reflect any migrated defaults
+    this.loadFontSettings();
   }
 
   applyTheme(theme) {
@@ -257,6 +261,17 @@ class SettingsManager {
     };
   }
 
+  // Explicitly compute defaults for a given theme so we can migrate saved colors
+  getDefaultFontSettingsFor(theme) {
+    const isLight = theme === 'light';
+    return {
+      commandFontSize: isLight ? '14' : '14',
+      commandFontColor: isLight ? '#383A42' : '#e8eaed',
+      outputFontSize: isLight ? '13' : '13',
+      outputFontColor: isLight ? '#4F525A' : '#c5c8c6'
+    };
+  }
+
   getFontSettings() {
     const defaults = this.getDefaultFontSettings();
     const savedCommandFontColor = localStorage.getItem('smarterminal_commandFontColor');
@@ -359,15 +374,22 @@ class SettingsManager {
     const settings = this.getFontSettings();
     const root = document.documentElement;
     const defaults = this.getDefaultFontSettings();
-    const shouldUseDefaultCommandColor = settings.commandFontColor === '#e8eaed' && defaults.commandFontColor !== '#e8eaed';
-    const shouldUseDefaultOutputColor = settings.outputFontColor === '#c5c8c6' && defaults.outputFontColor !== '#c5c8c6';
-    const commandFontColor = shouldUseDefaultCommandColor ? defaults.commandFontColor : settings.commandFontColor;
-    const outputFontColor = shouldUseDefaultOutputColor ? defaults.outputFontColor : settings.outputFontColor;
+    // If the saved color equals either theme's default, treat it as not customized
+    const lightDefaults = this.getDefaultFontSettingsFor('light');
+    const darkDefaults = this.getDefaultFontSettingsFor('dark');
 
-    if (shouldUseDefaultCommandColor) {
+    const savedCmd = (settings.commandFontColor || '').toLowerCase();
+    const savedOut = (settings.outputFontColor || '').toLowerCase();
+    const isSavedCmdDefault = savedCmd === lightDefaults.commandFontColor.toLowerCase() || savedCmd === darkDefaults.commandFontColor.toLowerCase();
+    const isSavedOutDefault = savedOut === lightDefaults.outputFontColor.toLowerCase() || savedOut === darkDefaults.outputFontColor.toLowerCase();
+
+    const commandFontColor = isSavedCmdDefault ? defaults.commandFontColor : settings.commandFontColor;
+    const outputFontColor = isSavedOutDefault ? defaults.outputFontColor : settings.outputFontColor;
+
+    if (isSavedCmdDefault) {
       localStorage.setItem('smarterminal_commandFontColor', commandFontColor);
     }
-    if (shouldUseDefaultOutputColor) {
+    if (isSavedOutDefault) {
       localStorage.setItem('smarterminal_outputFontColor', outputFontColor);
     }
 

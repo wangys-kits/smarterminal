@@ -2491,6 +2491,9 @@ function setupTabContextMenu() {
     if (!tabId) return;
 
     switch (action) {
+      case 'restart':
+        await restartTabSession(tabId);
+        break;
       case 'close':
         await closeTab(tabId);
         break;
@@ -2504,6 +2507,144 @@ function setupTabContextMenu() {
 
     tabContextMenu.classList.add('hidden');
   });
+}
+
+async function restartTabSession(tabId) {
+  const t = state.tabs.find(x => x.id === tabId);
+  if (!t) return;
+
+  // Persist current tab state first (best-effort)
+  try { await persistTab(t); } catch (_) {}
+
+  // Show blocking overlay and disable interactions
+  const overlay = document.getElementById('sessionRestartOverlay');
+  try {
+    overlay?.classList.remove('hidden');
+  } catch (_) {}
+  const commandInputEl = document.getElementById('commandInput');
+  const prevInputDisabled = commandInputEl ? commandInputEl.disabled : false;
+  if (commandInputEl) commandInputEl.disabled = true;
+
+  // If there is a running command in ChatTerminal, stop/clear it to avoid dangling state
+  try {
+    if (t.chatTerm) {
+      if (t.chatTerm.currentCommand?.terminationTimer) {
+        clearTimeout(t.chatTerm.currentCommand.terminationTimer);
+        t.chatTerm.currentCommand.terminationTimer = null;
+      }
+      t.chatTerm.currentCommand = null;
+      t.chatTerm.isCommandRunning = false;
+      t.chatTerm.commandQueue = [];
+      // Reset SSH context; new PTY means new session
+      t.chatTerm.pendingSshTarget = null;
+      t.chatTerm.activeSshTarget = null;
+      if (typeof t.chatTerm.updateInputAffordances === 'function') {
+        t.chatTerm.updateInputAffordances();
+      }
+    }
+  } catch (_) {}
+
+  // Gracefully kill existing PTY
+  try { sm.term.forceKill({ ptyId: t.ptyId }); } catch (_) {}
+
+  // Dispose and recreate xterm instance to avoid stale onData handlers
+  try { if (t.term && typeof t.term.dispose === 'function') t.term.dispose(); } catch (_) {}
+
+  // Create a new xterm with the same theme as addNewTab
+  const isWin = navigator.platform.toLowerCase().includes('win');
+  const xtermTheme = await (async () => { try { return await loadXtermTheme(); } catch { return {}; } })();
+  const term = new Terminal({
+    cursorBlink: true,
+    scrollback: 10000,
+    fontSize: 14,
+    fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+    letterSpacing: 0,
+    lineHeight: 1,
+    allowTransparency: false,
+    theme: {
+      ...xtermTheme,
+      foreground: '#E8ECF2',
+      background: '#0B1220'
+    }
+  });
+
+  // Spawn a fresh shell for this tab
+  const preferredShell = isWin ? null : '/bin/bash';
+  const spawnRes = await sm.term.spawn({ tabId, cols: 120, rows: 30, preferUTF8: true, shellName: preferredShell });
+  if (!spawnRes?.ok) {
+    alert('Failed to restart session: ' + (spawnRes?.error || 'unknown error'));
+    return;
+  }
+  const { ptyId } = spawnRes.data || {};
+
+  // Define writer/resizer bound to new ptyId
+  const writer = (d) => {
+    const res = sm.term.write({ ptyId, data: d });
+    if (res && typeof res.then === 'function') {
+      res.catch((err) => console.error('[term.write] failed', { ptyId, err }));
+    }
+    return res;
+  };
+  const resizer = (c, r) => sm.term.resize({ ptyId, cols: c, rows: r });
+
+  // Connect chat terminal to the new writer
+  if (t.chatTerm && typeof t.chatTerm.setWriter === 'function') {
+    t.chatTerm.setWriter(writer);
+    // Reset readiness so input affordances update when ready
+    t.chatTerm.terminalReady = false;
+    t.chatTerm.updateInputAffordances?.();
+    // Rebind getTabState so commands target the new PTY id
+    try {
+      t.chatTerm.getTabState = () => ({
+        id: ptyId,
+        ptyId: ptyId,
+        mode: t.mode || 'pty',
+        tabId: t.id,
+        cwd: t.cwd || null
+      });
+      if (typeof t.chatTerm.rebindLiveReferences === 'function') {
+        t.chatTerm.rebindLiveReferences();
+      }
+    } catch (_) {}
+  }
+
+  // Hook xterm keyboard to writer
+  try { term.onData(data => writer(data)); } catch (_) {}
+
+  // Route PTY output to xterm and chat terminal via shared handler
+  let firstDataSeen = false;
+  const dataHandler = (m) => {
+    if (m.ptyId === ptyId) {
+      handleTermData(tabId, term, t.chatTerm, m.data);
+      if (!firstDataSeen) {
+        firstDataSeen = true;
+        // Hide overlay on first data (terminal becomes responsive)
+        try { overlay?.classList.add('hidden'); } catch (_) {}
+        if (commandInputEl) commandInputEl.disabled = prevInputDisabled;
+      }
+    }
+  };
+  try { sm.term.onData(dataHandler); } catch (_) {}
+
+  // Update tab entry
+  t.ptyId = ptyId;
+  t.term = term;
+  t.write = writer;
+  t.resize = resizer;
+  t.dataHandler = dataHandler;
+  t.terminalReady = false;
+
+  // If this tab is active and in Terminal view, open the xterm into the pane
+  const isActiveNow = t.id === state.activeId;
+  if (isActiveNow && !state.useChatMode) {
+    while (termEl.firstChild) termEl.removeChild(termEl.firstChild);
+    term.open(termEl);
+    term.focus();
+    fitTerminalToPane();
+  }
+
+  // Ensure the title/path reflect the new session once CWD is reported
+  updateCurrentPathDisplay();
 }
 
 async function closeOtherTabs(keepTabId) {
@@ -2592,7 +2733,10 @@ function updateTabCommandStatus(tabId, isRunning) {
   if (isRunning) {
     nextStatus = 'running';
   } else if (previousStatus === 'running') {
-    nextStatus = 'completed';
+    // If the tab is currently active (user is viewing it), do not show the
+    // blue completion dot; directly return to idle state.
+    const isActiveNow = !state.showHome && tab.id === state.activeId;
+    nextStatus = isActiveNow ? 'idle' : 'completed';
   } else if (previousStatus === 'completed') {
     nextStatus = 'completed';
   } else {
@@ -2616,7 +2760,8 @@ function renderTabs() {
     const classNames = ['tab'];
     if (isActive) classNames.push('active');
     if (status === 'running') classNames.push('is-running');
-    if (status === 'completed') classNames.push('is-completed');
+    // Don't show the blue dot when the tab is active
+    if (status === 'completed' && !isActive) classNames.push('is-completed');
     tab.className = classNames.join(' ');
     tab.dataset.status = status;
     tab.dataset.tabId = t.id;
@@ -2934,6 +3079,13 @@ async function addNewTab(options = {}) {
     chatTerm.onCommandRunningChange = ({ isRunning } = {}) => {
       updateTabCommandStatus(tabEntry.id, Boolean(isRunning));
     };
+    // Allow ChatTerminal to request an immediate persist for critical UI state
+    // changes (e.g., collapse/expand). This bypasses the debounce to ensure
+    // the state is durable even if the app quits right after.
+    chatTerm.requestPersist = () => {
+      // Best-effort; ignore errors to avoid UI disruption.
+      try { persistTab(tabEntry); } catch (_) {}
+    };
   }
 
   chatTerm.setChangeHandler(() => {
@@ -2977,10 +3129,14 @@ function syncChatTermActivity(activeId = null) {
   });
 }
 
-function setActiveTab(id, { skipSave = false } = {}) {
-  // Save current tab's chat history before switching
+function setActiveTab(id, { skipSave = false, smooth = false } = {}) {
+  // If switching to the same tab, we still need to ensure the workspace is shown
+  // (e.g. when clicking a card from Home/Favorites/All while the tab is already active).
+  const isSameTab = state.activeId === id;
+
+  // Save current tab's chat history before switching to a different tab
   const currentTab = state.tabs.find(x => x.id === state.activeId);
-  if (!skipSave && currentTab?.chatTerm) {
+  if (!isSameTab && !skipSave && currentTab?.chatTerm) {
     if (!currentTab.chatTerm.isCommandRunning) {
       currentTab.chatTerm.saveMessageHistory();
       scheduleTabSave(currentTab);
@@ -2991,6 +3147,7 @@ function setActiveTab(id, { skipSave = false } = {}) {
 
   exitDescriptionEditMode({ discard: true });
 
+  // Always reassign activeId to keep logic below simple (harmless if same)
   state.activeId = id;
   const t = state.tabs.find(x => x.id === id);
   if (!t) {
@@ -3005,6 +3162,8 @@ function setActiveTab(id, { skipSave = false } = {}) {
 
   sessionState.activeTab = t.fileName || null;
   scheduleSessionSave();
+  // Ensure we leave Home/other pages and show the workspace even when clicking
+  // the already-active tab from a list card.
   hideHome();
 
   // Close all auxiliary views when switching to a tab
@@ -3024,67 +3183,75 @@ function setActiveTab(id, { skipSave = false } = {}) {
     workspaceView.classList.remove('hidden');
   }
 
-  syncChatTermActivity(t.id);
-  updateVisibleMessages(t.id);
-  if (findInPage && !findInPage.classList.contains('hidden')) {
-    clearFindHighlights();
-    findMatches = [];
-    currentMatchIndex = -1;
-    updateFindResults();
-  }
-
-  if (t.chatTerm) {
-    if (typeof t.chatTerm.rebindLiveReferences === 'function') {
-      t.chatTerm.rebindLiveReferences();
+  const performSwitch = () => {
+    syncChatTermActivity(t.id);
+    updateVisibleMessages(t.id);
+    if (findInPage && !findInPage.classList.contains('hidden')) {
+      clearFindHighlights();
+      findMatches = [];
+      currentMatchIndex = -1;
+      updateFindResults();
     }
-    t.chatTerm.updateInputAffordances();
-    if (typeof t.chatTerm.scrollToBottom === 'function') {
-      t.chatTerm.scrollToBottom();
-    }
-  }
-
-  renderTitleForTab(t);
-  renderDescriptionForTab(t);
-
-  // Update connection status
-  // Update current path in chat input with just directory name
-  updateCurrentPathDisplay();
-
-  if (t.commandStatus === 'completed') {
-    t.commandStatus = 'idle';
-  }
-
-  // Switch terminal UI based on mode
-  if (state.useChatMode) {
-    // Show chat terminal, hide xterm
-    chatContainer.style.display = 'flex';
-    chatContainer.style.flex = '';
-    chatContainer.classList.remove('interactive-overlay');
-    termEl.style.display = 'none';
-    termEl.style.flex = '';
-    if (commandInputWrapper) commandInputWrapper.style.display = 'block';
 
     if (t.chatTerm) {
-      t.chatTerm.focus();
+      if (typeof t.chatTerm.rebindLiveReferences === 'function') {
+        t.chatTerm.rebindLiveReferences();
+      }
+      t.chatTerm.updateInputAffordances();
+      if (typeof t.chatTerm.scrollToBottom === 'function') {
+        t.chatTerm.scrollToBottom();
+      }
     }
+
+    renderTitleForTab(t);
+    renderDescriptionForTab(t);
+
+    // Update connection status
+    // Update current path in chat input with just directory name
+    updateCurrentPathDisplay();
+
+    if (t.commandStatus === 'completed') {
+      t.commandStatus = 'idle';
+    }
+
+    // Switch terminal UI based on mode
+    if (state.useChatMode) {
+      // Show chat terminal, hide xterm
+      chatContainer.style.display = 'flex';
+      chatContainer.style.flex = '';
+      chatContainer.classList.remove('interactive-overlay');
+      termEl.style.display = 'none';
+      termEl.style.flex = '';
+      if (commandInputWrapper) commandInputWrapper.style.display = 'block';
+
+      if (t.chatTerm) {
+        t.chatTerm.focus();
+      }
+    } else {
+      // Terminal-focused view but keep chat history visible in a compact pane
+      chatContainer.style.display = 'flex';
+      chatContainer.style.flex = '0 0 220px';
+      chatContainer.classList.add('interactive-overlay');
+      termEl.style.display = 'block';
+      termEl.style.flex = '1 1 auto';
+      if (commandInputWrapper) commandInputWrapper.style.display = 'none';
+
+      // Reattach xterm
+      while (termEl.firstChild) termEl.removeChild(termEl.firstChild);
+      t.term.open(termEl);
+      t.term.focus();
+      fitTerminalToPane();
+    }
+
+    renderTabs();
+    scheduleScrollUpdate();
+  };
+
+  if (smooth && typeof requestAnimationFrame === 'function' && !isSameTab) {
+    requestAnimationFrame(performSwitch);
   } else {
-    // Terminal-focused view but keep chat history visible in a compact pane
-    chatContainer.style.display = 'flex';
-    chatContainer.style.flex = '0 0 220px';
-    chatContainer.classList.add('interactive-overlay');
-    termEl.style.display = 'block';
-    termEl.style.flex = '1 1 auto';
-    if (commandInputWrapper) commandInputWrapper.style.display = 'none';
-
-    // Reattach xterm
-    while (termEl.firstChild) termEl.removeChild(termEl.firstChild);
-    t.term.open(termEl);
-    t.term.focus();
-    fitTerminalToPane();
+    performSwitch();
   }
-
-  renderTabs();
-  scheduleScrollUpdate();
 }
 
 async function closeTab(id) {
@@ -3311,13 +3478,14 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Ctrl+1, Ctrl+2, Ctrl+3... : Switch to specific tab (1-9)
-  // Cmd+1, Cmd+2, Cmd+3... on Mac
-  if (ctrlOrCmd && /^[1-9]$/.test(e.key) && !inInput) {
+  // Ctrl/Cmd+1..9: Switch to specific tab (1-9)
+  // Note: Works even when focus is in an input/textarea (per request)
+  if (ctrlOrCmd && /^[1-9]$/.test(e.key)) {
     e.preventDefault();
     const tabIndex = parseInt(e.key, 10) - 1;
     if (state.tabs[tabIndex]) {
-      setActiveTab(state.tabs[tabIndex].id);
+      // Smooth, non-blocking switch: skip synchronous saves and defer heavy DOM work
+      setActiveTab(state.tabs[tabIndex].id, { skipSave: true, smooth: true });
     }
     return;
   }

@@ -1,5 +1,5 @@
 // Electron main process. Minimal secure defaults + IPC whitelist.
-const { app, BrowserWindow, ipcMain, shell, dialog, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, crashReporter, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -14,6 +14,7 @@ const kill = require('tree-kill');
 const ProcessMonitor = require('./process-monitor');
 const OutputStreamer = require('./output-streamer');
 const CommandExecutor = require('./command-executor');
+const { FileLogger } = require('./logger');
 
 const TAB_DIR_NAME = 'tabs';
 const TAB_EXTENSION = '.smt';
@@ -90,6 +91,62 @@ const sessionStore = new Store({ name: 'session', defaults: { windows: [] } });
 
 const isMac = process.platform === 'darwin';
 
+function buildAppMenu() {
+  try {
+    const logDir = () => {
+      const dir = path.join(app.getPath('userData'), 'logs');
+      fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    };
+    const template = [
+      ...(isMac ? [{
+        label: app.name || 'SmartTerminal',
+        submenu: [
+          { role: 'about' },
+          { type: 'separator' },
+          { role: 'services' },
+          { type: 'separator' },
+          { role: 'hide' },
+          { role: 'hideOthers' },
+          { role: 'unhide' },
+          { type: 'separator' },
+          { role: 'quit' },
+        ]
+      }] : []),
+      {
+        label: 'Edit',
+        submenu: [
+          { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+          { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }
+        ]
+      },
+      {
+        label: 'View',
+        submenu: [
+          { role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, { type: 'separator' },
+          { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' },
+          { role: 'togglefullscreen' }
+        ]
+      },
+      {
+        role: 'window',
+        submenu: [ { role: 'minimize' }, { role: 'close' } ]
+      },
+      {
+        role: 'help',
+        submenu: [
+          { label: '打开日志文件夹…', click: () => shell.openPath(logDir()) },
+          { label: '复制日志目录路径', click: () => clipboard.writeText(logDir()) },
+        ]
+      }
+    ];
+    const menu = Menu.buildFromTemplate(template);
+    Menu.setApplicationMenu(menu);
+  } catch (e) {
+    console.warn('[menu] failed to build menu:', e?.message || e);
+  }
+}
+
 /** @type {Map<string, import('node-pty').IPty>} */
 const PTYS = new Map();
 /** @type {Map<string, any>} */
@@ -100,6 +157,158 @@ const MONITORS = new Map();
 const STREAMERS = new Map();
 /** @type {CommandExecutor} */
 let commandExecutor = null;
+
+// Lightweight app-level metrics sampling (uses Electron app.getAppMetrics)
+let APP_METRICS_TIMER = null;
+let APP_METRICS_STREAM = null;
+let LOGGER = null;
+let EVENT_LOOP_TIMER = null;
+let EVENT_LOOP_HIST = null;
+function startAppMetricsSampling() {
+  try {
+    const metricsDir = path.join(app.getPath('userData'), 'metrics');
+    fs.mkdirSync(metricsDir, { recursive: true });
+    const file = path.join(metricsDir, 'app-metrics.csv');
+    const exists = fs.existsSync(file);
+    APP_METRICS_STREAM = fs.createWriteStream(file, { flags: 'a' });
+    if (!exists) {
+      APP_METRICS_STREAM.write('timestamp,total_cpu,main_cpu,renderers_cpu,gpu_cpu,proc_count,total_working_set_mb\n');
+    }
+  } catch (e) {
+    console.warn('[metrics] failed to init stream', e?.message || e);
+    APP_METRICS_STREAM = null;
+  }
+  if (APP_METRICS_TIMER) return;
+  APP_METRICS_TIMER = setInterval(() => {
+    try {
+      const entries = app.getAppMetrics ? app.getAppMetrics() : [];
+      let ts = Date.now();
+      let totalCpu = 0, mainCpu = 0, renderCpu = 0, gpuCpu = 0, count = 0, totalWS = 0;
+      for (const m of entries) {
+        const cpu = m?.cpu?.percentCPUUsage || 0;
+        const ws = m?.memory?.workingSetSize || 0;
+        totalCpu += cpu; totalWS += ws; count++;
+        const type = (m?.type || '').toLowerCase();
+        if (type === 'browser') mainCpu += cpu;
+        else if (type === 'renderer') renderCpu += cpu;
+        else if (type === 'gpu') gpuCpu += cpu;
+      }
+      const line = `${ts},${totalCpu.toFixed(2)},${mainCpu.toFixed(2)},${renderCpu.toFixed(2)},${gpuCpu.toFixed(2)},${count},${(totalWS/1048576).toFixed(2)}\n`;
+      if (APP_METRICS_STREAM) APP_METRICS_STREAM.write(line);
+    } catch (e) {
+      // ignore sampling errors
+    }
+  }, 1000);
+}
+function stopAppMetricsSampling() {
+  if (APP_METRICS_TIMER) { clearInterval(APP_METRICS_TIMER); APP_METRICS_TIMER = null; }
+  try { if (APP_METRICS_STREAM) { APP_METRICS_STREAM.end(); APP_METRICS_STREAM = null; } } catch (_) {}
+}
+
+function setupCrashAndDiagnostics() {
+  try {
+    // Start crash reporter (no upload; dumps stored locally)
+    crashReporter.start({
+      productName: 'SmartTerminal',
+      companyName: 'SmartTerminal',
+      submitURL: 'https://invalid.local',
+      uploadToServer: false,
+      compress: true,
+      ignoreSystemCrashHandler: false,
+      rateLimit: true,
+    });
+  } catch (e) {
+    console.warn('[crashReporter] start failed:', e?.message || e);
+  }
+
+  // Init structured logger
+  try {
+    LOGGER = new FileLogger({ getUserData: () => app.getPath('userData'), product: 'SmartTerminal' });
+    LOGGER.info('logger.init', { version: app.getVersion?.() || '0', electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node });
+  } catch (e) {
+    console.warn('[logger] init failed:', e?.message || e);
+  }
+
+  // Wire console to also write into file (non-intrusive)
+  const _log = console.log.bind(console);
+  const _warn = console.warn.bind(console);
+  const _err = console.error.bind(console);
+  console.log = (...args) => { try { LOGGER && LOGGER.info(args.join(' ')); } catch(_){}; _log(...args); };
+  console.warn = (...args) => { try { LOGGER && LOGGER.warn(args.join(' ')); } catch(_){}; _warn(...args); };
+  console.error = (...args) => { try { LOGGER && LOGGER.error(args.join(' ')); } catch(_){}; _err(...args); };
+
+  // Process-level error handlers
+  process.on('uncaughtException', (err) => {
+    const meta = { type: 'uncaughtException', name: err?.name, message: err?.message, stack: String(err?.stack || '') };
+    try { LOGGER && LOGGER.error('process.uncaughtException', meta); } catch(_){}
+    _err('[uncaughtException]', err);
+  });
+  process.on('unhandledRejection', (reason, promise) => {
+    const meta = { type: 'unhandledRejection', reason: String(reason), stack: reason && reason.stack ? String(reason.stack) : '' };
+    try { LOGGER && LOGGER.error('process.unhandledRejection', meta); } catch(_){}
+    _err('[unhandledRejection]', reason);
+  });
+
+  // WebContents / app crash watchers
+  app.on('web-contents-created', (_e, wc) => {
+    wc.on('render-process-gone', (_event, details) => {
+      try { LOGGER && LOGGER.error('renderer.gone', { ...details, url: wc.getURL?.() || '' }); } catch(_){}
+    });
+    wc.on('unresponsive', () => {
+      try { LOGGER && LOGGER.warn('renderer.unresponsive', { url: wc.getURL?.() || '' }); } catch(_){}
+    });
+    wc.on('responsive', () => {
+      try { LOGGER && LOGGER.info('renderer.responsive', { url: wc.getURL?.() || '' }); } catch(_){}
+    });
+    wc.on('crashed', (_event, killed) => {
+      try { LOGGER && LOGGER.error('renderer.crashed', { killed, url: wc.getURL?.() || '' }); } catch(_){}
+    });
+    wc.on('console-message', (_event, level, message, line, sourceId) => {
+      // Forward renderer console messages to logs (level: 0 log, 1 warn, 2 error)
+      const meta = { level, line, sourceId, url: wc.getURL?.() || '' };
+      try {
+        if (level === 2) LOGGER && LOGGER.error(`renderer.console: ${message}`, meta);
+        else if (level === 1) LOGGER && LOGGER.warn(`renderer.console: ${message}`, meta);
+        else LOGGER && LOGGER.info(`renderer.console: ${message}`, meta);
+      } catch(_){}
+    });
+  });
+  app.on('render-process-gone', (_e, wc, details) => {
+    try { LOGGER && LOGGER.error('app.render-process-gone', { ...details, url: wc?.getURL?.() || '' }); } catch(_){}
+  });
+  app.on('child-process-gone', (_e, details) => {
+    try { LOGGER && LOGGER.error('app.child-process-gone', details); } catch(_){}
+  });
+  app.on('gpu-process-crashed', (_e, killed) => {
+    try { LOGGER && LOGGER.error('app.gpu-process-crashed', { killed }); } catch(_){}
+  });
+
+  // Monitor event loop delay to catch stalls
+  try {
+    const { monitorEventLoopDelay } = require('perf_hooks');
+    EVENT_LOOP_HIST = monitorEventLoopDelay({ resolution: 20 });
+    EVENT_LOOP_HIST.enable();
+    EVENT_LOOP_TIMER = setInterval(() => {
+      const mean = EVENT_LOOP_HIST.mean / 1e6; // to ms
+      const max = EVENT_LOOP_HIST.max / 1e6;
+      const p99 = EVENT_LOOP_HIST.percentiles ? (EVENT_LOOP_HIST.percentiles.get ? EVENT_LOOP_HIST.percentiles.get(99) : 0) : 0;
+      if (LOGGER) LOGGER.debug('eventloop.delay', { mean_ms: +mean.toFixed(2), max_ms: +max.toFixed(2), p99_ns: p99 || undefined });
+      if (max > 200) { // 200ms stall threshold
+        LOGGER && LOGGER.warn('eventloop.stall', { max_ms: +max.toFixed(2) });
+      }
+      EVENT_LOOP_HIST.reset();
+    }, 2000);
+  } catch (e) {
+    console.warn('[perf] monitorEventLoopDelay not available:', e?.message || e);
+  }
+}
+
+function teardownDiagnostics() {
+  try { if (EVENT_LOOP_TIMER) clearInterval(EVENT_LOOP_TIMER); } catch(_){}
+  EVENT_LOOP_TIMER = null;
+  try { if (EVENT_LOOP_HIST) EVENT_LOOP_HIST.disable(); } catch(_){}
+  EVENT_LOOP_HIST = null;
+}
 
 
 function createWindow() {
@@ -131,6 +340,13 @@ function createWindow() {
     win.webContents.openDevTools({ mode: 'detach' });
   }
 
+  // Surface renderer crashes for this window
+  try {
+    win.webContents.on('render-process-gone', (_e, details) => { LOGGER && LOGGER.error('win.render-process-gone', { ...details }); });
+    win.on('unresponsive', () => { LOGGER && LOGGER.warn('win.unresponsive', {}); });
+    win.on('responsive', () => { LOGGER && LOGGER.info('win.responsive', {}); });
+  } catch (_) {}
+
   return win;
 }
 
@@ -143,11 +359,33 @@ app.on('activate', () => {
 });
 
 app.whenReady().then(() => {
+  // Note: Setting Dock icon at runtime will bypass macOS' squircle mask and
+  // show a raw square in the Dock. Now that the .icns is fixed, we avoid
+  // overriding it. You can re-enable by setting SMARTTERM_FORCE_DOCK_ICON=1.
+  try {
+    if (process.env.SMARTTERM_FORCE_DOCK_ICON === '1' && isMac && app?.dock?.setIcon) {
+      const dockPng = path.join(__dirname, 'assets', 'app-icon.png');
+      if (fs.existsSync(dockPng)) app.dock.setIcon(dockPng);
+    }
+  } catch (e) {
+    console.warn('[main] failed to optionally set dock icon:', e?.message || e);
+  }
+
+  setupCrashAndDiagnostics();
+  buildAppMenu();
   // 初始化命令执行器
   commandExecutor = new CommandExecutor();
 
   registerTabHandlers();
   createWindow();
+  // start app-level metrics sampling
+  startAppMetricsSampling();
+  // Log key diagnostic paths for support
+  try {
+    const crashDir = app.getPath('crashDumps');
+    const logDir = path.join(app.getPath('userData'), 'logs');
+    LOGGER && LOGGER.info('diagnostic.paths', { crashDir, logDir, userData: app.getPath('userData') });
+  } catch (_) {}
 });
 
 // 应用退出时清理所有进程
@@ -155,6 +393,8 @@ app.on('before-quit', async () => {
   if (commandExecutor) {
     await commandExecutor.cleanup();
   }
+  stopAppMetricsSampling();
+  teardownDiagnostics();
 });
 
 // IPC contracts (whitelist)
@@ -174,14 +414,33 @@ ipcMain.handle('term.spawn', (event, args) => {
     env.LC_ALL = 'C.UTF-8';
     env.LANG = 'C.UTF-8';
   }
+  // Ensure PATH is sane when launched from Finder (limited env)
+  if (process.platform === 'darwin') {
+    try {
+      const extraPaths = ['/usr/local/bin', '/usr/local/sbin', '/opt/homebrew/bin', '/opt/homebrew/sbin'];
+      const pathParts = (env.PATH || '').split(path.delimiter).filter(Boolean);
+      for (const p of extraPaths) { if (!pathParts.includes(p) && fs.existsSync(p)) pathParts.unshift(p); }
+      for (const p of ['/usr/bin','/bin','/usr/sbin','/sbin']) { if (!pathParts.includes(p)) pathParts.push(p); }
+      env.PATH = pathParts.join(path.delimiter);
+    } catch (_) {}
+  }
 
   const ptyId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   let proc;
   try {
+    try { LOGGER && LOGGER.info('term.spawn', { ptyId, shell: shellExe, cwd: cwd || os.homedir(), cols: cols || 120, rows: rows || 30 }); } catch(_){}
     if (pty) {
-      // Preferred PTY
-      proc = pty.spawn(shellExe, [], {
-        name: 'xterm-color',
+      // Preferred PTY: use a login shell so PATH from ~/.zprofile and ~/.zshrc is loaded
+      const spawnArgsPty = [];
+      try {
+        const lower = (shellExe || '').toLowerCase();
+        if (lower.includes('zsh') || lower.includes('bash')) {
+          spawnArgsPty.push('-l');
+        }
+      } catch (_) {}
+
+      proc = pty.spawn(shellExe, spawnArgsPty, {
+        name: 'xterm-256color',
         cols: cols || 120,
         rows: rows || 30,
         cwd: cwd || os.homedir(),
@@ -207,23 +466,15 @@ ipcMain.handle('term.spawn', (event, args) => {
 
       monitor.on('high-cpu', (metrics) => {
         try {
-          event.sender.send('evt.term.warning', {
-            ptyId,
-            type: 'high-cpu',
-            message: 'High CPU usage detected',
-            metrics
-          });
+          LOGGER && LOGGER.warn('term.high-cpu', { ptyId, cpu: metrics.cpuUsage, mem: metrics.memoryUsage });
+          event.sender.send('evt.term.warning', { ptyId, type: 'high-cpu', message: 'High CPU usage detected', metrics });
         } catch (_) {}
       });
 
       monitor.on('high-memory', (metrics) => {
         try {
-          event.sender.send('evt.term.warning', {
-            ptyId,
-            type: 'high-memory',
-            message: 'High memory usage detected',
-            metrics
-          });
+          LOGGER && LOGGER.warn('term.high-memory', { ptyId, cpu: metrics.cpuUsage, mem: metrics.memoryUsage });
+          event.sender.send('evt.term.warning', { ptyId, type: 'high-memory', message: 'High memory usage detected', metrics });
         } catch (_) {}
       });
 
@@ -244,6 +495,7 @@ ipcMain.handle('term.spawn', (event, args) => {
 
       proc.onExit(e => {
         try {
+          LOGGER && LOGGER.info('term.exit', { ptyId, code: e.exitCode, signal: e.signal });
           // 停止监控和流
           const mon = MONITORS.get(ptyId);
           if (mon) {
@@ -262,29 +514,35 @@ ipcMain.handle('term.spawn', (event, args) => {
         PTYS.delete(ptyId);
       });
     } else {
-      // Fallback strategy without node-pty: launch an interactive shell directly using pipes.
-      // The previous `script` wrapper fails in Electron sandboxes ("tcgetattr/ioctl" errors),
-      // so we instead force interactive mode and rely on sentinel injection for completion.
+      // Fallback strategy without node-pty: spawn the resolved login shell via pipes.
+      // Use the same shell as resolveShellExecutable() to respect user's default (zsh on macOS).
       let sh = shellExe;
       let spawnArgs = [];
       if (process.platform === 'win32') {
         spawnArgs = ['-NoLogo'];
       } else {
-        const bash = findExecutable('/bin/bash') || findExecutable('/usr/bin/bash');
-        const shBin = findExecutable('/bin/sh') || findExecutable('/usr/bin/sh');
-        if (bash) {
-          sh = bash;
-          spawnArgs = ['-i'];
-        } else if (shBin) {
-          sh = shBin;
-          spawnArgs = ['-i'];
-        } else {
-          sh = shellExe;
-          spawnArgs = ['-i'];
-        }
+        // Ensure PATH contains common Homebrew/user locations when launched from Finder
+        try {
+          const extraPaths = ['/usr/local/bin', '/usr/local/sbin', '/opt/homebrew/bin', '/opt/homebrew/sbin'];
+          const pathParts = (env.PATH || '').split(path.delimiter).filter(Boolean);
+          for (const p of extraPaths) { if (!pathParts.includes(p) && fs.existsSync(p)) pathParts.unshift(p); }
+          // Also guarantee core system paths are present at the end
+          for (const p of ['/usr/bin','/bin','/usr/sbin','/sbin']) { if (!pathParts.includes(p)) pathParts.push(p); }
+          env.PATH = pathParts.join(path.delimiter);
+        } catch (_) {}
+
+        // If resolution failed for some reason, fall back in preferred order
+        if (!sh) sh = findExecutable('/bin/zsh') || findExecutable('/usr/bin/zsh');
+        if (!sh) sh = findExecutable('/bin/bash') || findExecutable('/usr/bin/bash');
+        if (!sh) sh = findExecutable('/bin/sh') || findExecutable('/usr/bin/sh');
+        // Interactivity: prefer login shells so user env (PATH, aliases) is loaded
+        if (sh && sh.includes('zsh')) spawnArgs = ['-l'];
+        else if (sh && sh.includes('bash')) spawnArgs = ['-l'];
+        else spawnArgs = ['-i'];
         env.PS1 = env.PS1 || '';
         env.TERM = env.TERM || 'xterm-256color';
       }
+      try { LOGGER && LOGGER.info('term.spawn.fallback', { shell: sh, args: spawnArgs }); } catch(_){}
       proc = spawn(sh, spawnArgs, { cwd: cwd || os.homedir(), env });
       PTYS.set(ptyId, proc);
 
@@ -306,23 +564,15 @@ ipcMain.handle('term.spawn', (event, args) => {
 
       monitor.on('high-cpu', (metrics) => {
         try {
-          event.sender.send('evt.term.warning', {
-            ptyId,
-            type: 'high-cpu',
-            message: 'High CPU usage detected',
-            metrics
-          });
+          LOGGER && LOGGER.warn('term.high-cpu', { ptyId, cpu: metrics.cpuUsage, mem: metrics.memoryUsage });
+          event.sender.send('evt.term.warning', { ptyId, type: 'high-cpu', message: 'High CPU usage detected', metrics });
         } catch (_) {}
       });
 
       monitor.on('high-memory', (metrics) => {
         try {
-          event.sender.send('evt.term.warning', {
-            ptyId,
-            type: 'high-memory',
-            message: 'High memory usage detected',
-            metrics
-          });
+          LOGGER && LOGGER.warn('term.high-memory', { ptyId, cpu: metrics.cpuUsage, mem: metrics.memoryUsage });
+          event.sender.send('evt.term.warning', { ptyId, type: 'high-memory', message: 'High memory usage detected', metrics });
         } catch (_) {}
       });
 
@@ -533,6 +783,12 @@ ipcMain.handle('cmd.execute', (event, { commandId, command, cwd }) => {
   }
 
   try {
+    // Avoid logging full command to protect sensitive args; log only the first token and length
+    try {
+      const preview = (command || '').toString().trim();
+      const firstToken = preview.split(/\s+/)[0] || '';
+      LOGGER && LOGGER.info('cmd.execute', { commandId, cwd, cmd: firstToken, length: preview.length });
+    } catch(_){}
     const result = commandExecutor.executeCommand(commandId, command, { cwd });
 
     // 创建输出流和监控器
@@ -553,23 +809,15 @@ ipcMain.handle('cmd.execute', (event, { commandId, command, cwd }) => {
 
     monitor.on('high-cpu', (metrics) => {
       try {
-        event.sender.send('evt.cmd.warning', {
-          commandId,
-          type: 'high-cpu',
-          message: 'High CPU usage detected',
-          metrics
-        });
+        LOGGER && LOGGER.warn('cmd.high-cpu', { commandId, cpu: metrics.cpuUsage, mem: metrics.memoryUsage });
+        event.sender.send('evt.cmd.warning', { commandId, type: 'high-cpu', message: 'High CPU usage detected', metrics });
       } catch (_) {}
     });
 
     monitor.on('high-memory', (metrics) => {
       try {
-        event.sender.send('evt.cmd.warning', {
-          commandId,
-          type: 'high-memory',
-          message: 'High memory usage detected',
-          metrics
-        });
+        LOGGER && LOGGER.warn('cmd.high-memory', { commandId, cpu: metrics.cpuUsage, mem: metrics.memoryUsage });
+        event.sender.send('evt.cmd.warning', { commandId, type: 'high-memory', message: 'High memory usage detected', metrics });
       } catch (_) {}
     });
 
@@ -607,6 +855,7 @@ ipcMain.handle('cmd.execute', (event, { commandId, command, cwd }) => {
     result.onExit((code, signal) => {
       try {
         console.log('[cmd.execute] Process exited:', { commandId, code, signal });
+        LOGGER && LOGGER.info('cmd.exit', { commandId, code, signal });
 
         // 停止监控和流
         const mon = MONITORS.get(commandId);
@@ -643,6 +892,7 @@ ipcMain.handle('cmd.kill', async (_e, { commandId }) => {
 
   try {
     console.log('[cmd.kill] Killing command:', commandId);
+    LOGGER && LOGGER.info('cmd.kill', { commandId });
     await commandExecutor.killCommand(commandId);
 
     // 清理监控器和输出流
@@ -738,6 +988,25 @@ ipcMain.handle('app.getDownloadsDir', () => {
   try {
     const p = app.getPath('downloads');
     return { ok: true, data: p };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('app.getLogDir', () => {
+  try {
+    const dir = path.join(app.getPath('userData'), 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    return { ok: true, data: dir };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('app.openLogsDir', () => {
+  try {
+    const dir = path.join(app.getPath('userData'), 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    shell.openPath(dir);
+    return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };
   }
@@ -1105,6 +1374,17 @@ ipcMain.handle('fs.rename', async (_e, { oldPath, newPath }) => {
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };
   }
+});
+
+// Logging controls and renderer error intake
+ipcMain.handle('log.getLevel', () => {
+  try { return { ok: true, data: LOGGER ? LOGGER.level : (process.env.SM_LOG_LEVEL || 'info') }; } catch (e) { return { ok:false, error:String(e?.message||e) }; }
+});
+ipcMain.handle('log.setLevel', (_e, level) => {
+  try { if (LOGGER) LOGGER.level = String(level || 'info'); return { ok: true, data: LOGGER.level }; } catch (e) { return { ok:false, error:String(e?.message||e) }; }
+});
+ipcMain.handle('log.rendererError', (_e, payload) => {
+  try { LOGGER && LOGGER.error('renderer.error', payload || {}); return { ok: true }; } catch (e) { return { ok:false, error:String(e?.message||e) }; }
 });
 
 ipcMain.handle('fs.delete', async (_e, { path: targetPath }) => {

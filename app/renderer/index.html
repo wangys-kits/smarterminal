@@ -309,7 +309,7 @@
           <h2 class="settings-section-title" data-i18n="settings.transfers">文件传输</h2>
           <div class="settings-subsection">
             <h3 class="settings-subsection-title" data-i18n="settings.transfers.downloads">下载</h3>
-            <div class="form-group">
+              <div class="form-group">
               <label class="form-label" for="downloadsDirInput" data-i18n="settings.transfers.downloadsDir">下载保存目录</label>
               <div class="input-group">
                 <div class="path-input">
@@ -318,14 +318,14 @@
                       <path d="M10 4H4c-1.1 0-2 .9-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8l-6-4h-6zm0 2v4h6V6h-6z"/>
                     </svg>
                   </span>
-                  <input type="text" id="downloadsDirInput" class="form-input path-input-field" placeholder="~/Downloads" />
+                  <input type="text" id="downloadsDirInput" class="form-input path-input-field" placeholder="~/Downloads" data-i18n-placeholder="settings.transfers.downloadsDir.placeholder" />
                 </div>
                 <button id="chooseDownloadsDirBtn" class="settings-button settings-button-secondary" type="button" data-i18n="settings.transfers.choose">选择…</button>
               </div>
-              <div class="form-hint" id="downloadsDirHint">默认保存到系统下载文件夹，可在此处修改。</div>
+              <div class="form-hint" id="downloadsDirHint" data-i18n="settings.transfers.hint">默认保存到系统下载文件夹，可在此处修改。</div>
             </div>
             <div class="settings-actions">
-              <button id="resetDownloadsDirBtn" class="settings-button settings-button-secondary" type="button">恢复默认</button>
+              <button id="resetDownloadsDirBtn" class="settings-button settings-button-secondary" type="button" data-i18n="settings.reset">恢复默认</button>
               <button id="saveTransfersBtn" class="settings-button settings-button-primary" type="button" data-i18n="settings.save">保存</button>
             </div>
           </div>
@@ -422,14 +422,17 @@
               <span class="prompt-symbol">In [1]:</span>
               <span class="current-path" id="currentPath">~</span>
             </div>
-          <textarea
-            id="commandInput"
-            class="command-input"
-            placeholder="Type a command and press Enter..."
-            rows="1"
-            autocomplete="off"
-            spellcheck="false"
-          ></textarea>
+            <!-- Line number gutter for current command input -->
+            <div class="code-gutter" id="inputLineNumbers" aria-hidden="true"></div>
+            <textarea
+              id="commandInput"
+              class="command-input"
+              placeholder="Type a command and press Enter..."
+              rows="1"
+              autocomplete="off"
+              spellcheck="false"
+            ></textarea>
+          </div>
         </div>
         <!-- Command Suggestions Dropdown -->
         <div class="command-suggestions hidden" id="commandSuggestions">
@@ -472,6 +475,9 @@
 
   <!-- Tab Context Menu -->
   <div id="tabContextMenu" class="context-menu hidden">
+    <div class="context-menu-item" data-action="restart">
+      <span data-i18n="tab.contextMenu.restart">重启会话</span>
+    </div>
     <div class="context-menu-item" data-action="close">
       <span data-i18n="tab.contextMenu.close">关闭</span>
     </div>
@@ -531,6 +537,17 @@
         <div class="command-palette-footer">
           <span class="palette-hint">↑↓ Navigate • Enter Execute • Esc Close</span>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Session Restart Overlay -->
+  <div id="sessionRestartOverlay" class="modal hidden" role="dialog" aria-modal="true" aria-label="Restarting Session">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog" style="background: transparent; box-shadow: none; display: flex; justify-content: center; align-items: center; min-height: 30vh;">
+      <div class="restart-overlay">
+        <div class="restart-spinner"></div>
+        <div class="restart-text">正在重启会话…</div>
       </div>
     </div>
   </div>

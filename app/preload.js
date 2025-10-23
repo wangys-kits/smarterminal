@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('sm', {
   app: {
     getHomeDir: () => invoke('app.getHomeDir'),
     getDownloadsDir: () => invoke('app.getDownloadsDir'),
+    getLogDir: () => invoke('app.getLogDir'),
+    openLogsDir: () => invoke('app.openLogsDir'),
     getPlatform: () => invoke('app.getPlatform'),
     openExternal: (url) => invoke('app.openExternal', url)
   }
@@ -64,3 +66,29 @@ contextBridge.exposeInMainWorld('sm', {
     getFilePaths: () => invoke('clipboard.readFilePaths')
   }
 });
+
+// Capture renderer crash info for diagnostics
+try {
+  window.addEventListener('error', (e) => {
+    try {
+      invoke('log.rendererError', {
+        type: 'error',
+        message: String(e?.message || ''),
+        source: String(e?.filename || ''),
+        lineno: e?.lineno || 0,
+        colno: e?.colno || 0,
+        stack: e?.error && e.error.stack ? String(e.error.stack) : ''
+      });
+    } catch (_) {}
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    try {
+      const reason = e?.reason;
+      invoke('log.rendererError', {
+        type: 'unhandledrejection',
+        message: reason && reason.message ? String(reason.message) : String(reason),
+        stack: reason && reason.stack ? String(reason.stack) : ''
+      });
+    } catch (_) {}
+  });
+} catch (_) {}
