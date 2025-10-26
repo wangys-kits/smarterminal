@@ -2,6 +2,11 @@
 
 Modern, cross‑platform "intelligent terminal workspace" built with Electron. Current focus is a chat‑style terminal (notebook‑like cells) with per‑tab persistence, i18n, and basic process/output tooling. Classic xterm remains available alongside the chat surface.
 
+## Core Highlights
+- **Unified Command Workspace** — Chat-style cells, AI suggestions, quick execute, and tmux-backed multi-tab sessions stay in a single flow.
+- **Context-Aware History** — Favorites, All, and Recycle views plus one-click rerun/Shift+Enter keep focus in-place while resurfacing past commands.
+- **Rich Output & Preview** — Virtualized Out panels, copy-without-line-numbers, and the `/view` command render Markdown and common images inline.
+
 ## Key Features (Implemented)
 - Chat‑style terminal (“notebook” cells)
   - Shift+Enter to run; Enter for newline; Ctrl+C to interrupt
@@ -14,6 +19,9 @@ Modern, cross‑platform "intelligent terminal workspace" built with Electron. C
 - Terminal engine
   - Prefers `node-pty`; falls back to stdio `spawn` when PTY is unavailable
   - PTY/stdio aware stop/kill: Ctrl+C first, force kill for non‑responsive stdio shells
+- tmux session manager
+  - Local tabs try to launch tmux-backed shells for prompt persistence (falls back automatically when tmux is missing)
+  - SSH tabs provision a remote tmux session, uploading the bundled binary when the server does not already have tmux
 - Monitoring & logs
   - Lightweight per‑process monitor (CPU, memory, output rate, runtime); warnings are forwarded to renderer but UI indicators are minimal/disabled by default
   - Stream all command/terminal output to rotating log files under app data (`command-outputs/*.log`)
@@ -26,7 +34,11 @@ Modern, cross‑platform "intelligent terminal workspace" built with Electron. C
 
 - Command palette (scaffold)
   - Modal with live filter and basic actions (e.g. Close Tab, Clear Terminal)
+  - "Open SSH Session" command provisions a tmux-backed remote shell (requires optional `ssh2` and bundled tmux binaries)
   - Global shortcut not bound yet
+- `/view` previews
+  - `/view <file>` renders Markdown or image previews inside Out cells (local sessions only for now)
+  - Graceful handling for unsupported types, missing files, size limits, and remote sessions
 
 ## Not Yet Implemented (Roadmap)
 - SSH connection management UI and terminal sessions (foundation exists; no user‑visible connect flow yet)
@@ -59,11 +71,24 @@ npx electron@29 .
 
 ### Optional: Native/SSH Modules
 - PTY: `node-pty` is installed by default; if native build fails, the app automatically falls back to stdio mode.
-- SSH/SFTP: groundwork exists but the UI is not wired. You can install optional deps for development:
+- SSH/Tmux over SSH: remote terminals and the transfer manager rely on the optional `ssh2` dependency. Install it when you need SSH features:
   ```bash
   npm install --cache ./node-cache ssh2
   ```
-  The SFTP transfer manager internally expects an established SSH connection; no public IPC to create one is exposed yet.
+  With `ssh2` available, the app can open tmux-backed SSH tabs from the command palette. A valid authentication method is still required (SSH agent, private key, or password).
+
+### Bundled `tmux` Binaries
+Local tabs prefer launching tmux. Provide platform binaries under `app/resources/tmux/`:
+
+```
+app/resources/tmux/
+├── linux-x86_64/
+│   └── tmux        # executable (optionally tmux.sha256)
+└── linux-arm64/
+    └── tmux
+```
+
+At runtime the binary is copied into `${userData}/tmux-bundled/…` and marked executable. Remote SSH sessions reuse the same assets—if the server does not have `tmux`, the binary is uploaded to `~/.smarterminal/bin/tmux` automatically.
 
 ## Usage Basics
 - Create a new session tab from the home screen; double‑click the title to rename.
@@ -71,6 +96,8 @@ npx electron@29 .
 - Use Markdown cells for notes; Shift+Enter to render.
 - Each run appears as a cell with output that you can collapse or copy.
 - Sessions auto‑save; find them later under Home → Favorites/All/Recycle.
+- Need a remote shell? Use the command palette's **Open SSH Session** action to start a tmux-backed SSH tab (requires optional `ssh2` and bundled tmux binaries).
+- Want a quick preview? Run `/view README.md` (supports Markdown and common image formats during the first phase).
 
 ### Keyboard Shortcuts
 - Shift+Enter: execute current composer content (command or Markdown)
