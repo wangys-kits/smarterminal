@@ -109,6 +109,23 @@ export class CellManager {
       commandPre.setAttribute('role', 'textbox');
     } catch (_) { /* best-effort */ }
 
+    const execButton = document.createElement('button');
+    execButton.type = 'button';
+    execButton.className = 'cell-execute-btn';
+    const execTitle = i18n.t('command.execute.title', '执行命令');
+    const execAria = i18n.t('command.execute.aria', '执行当前命令');
+    const execText = i18n.t('command.execute.short', '执行');
+    execButton.setAttribute('title', execTitle);
+    execButton.setAttribute('aria-label', execAria);
+    execButton.innerHTML = `
+      <span class="cell-execute-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" focusable="false">
+          <path d="M8.5 6.75a1 1 0 011.53-.85l7.5 4.75a1 1 0 010 1.7l-7.5 4.75A1 1 0 018 16.25V7.75a1 1 0 01.5-.87z" fill="currentColor"/>
+        </svg>
+      </span>
+      <span class="visually-hidden">${execText}</span>
+    `;
+
     const cellContext = {
       cellEl,
       cellId,
@@ -122,10 +139,11 @@ export class CellManager {
       controlPrompt: null,
       executionIndex: null,
       collapsed: false,
-      editing: false
+      editing: false,
+      execButton
     };
 
-    editorWrapper.append(commandGutter, commandPre);
+    editorWrapper.append(commandGutter, commandPre, execButton);
     inputContent.appendChild(editorWrapper);
     inputRow.append(inputPrompt, inputContent);
 

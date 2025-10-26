@@ -48,18 +48,12 @@ const translations = {
     'home.favorite.remove': '取消收藏',
 
     // Features
-    'feature.smartTerminal': '智能命令行',
-    'feature.smartTerminal.desc': '集成AI辅助，实时命令建议与智能补全',
-    'feature.structuredNotes': '结构化笔记',
-    'feature.structuredNotes.desc': 'Markdown支持，命令与文档完美融合',
-    'feature.sessionManagement': '对话管理',
-    'feature.sessionManagement.desc': '多会话并行，历史记录随时恢复',
-    'feature.dualMode': '双模式切换',
-    'feature.dualMode.desc': 'Chat与Terminal无缝切换，适配不同场景',
-    'feature.autoSave': '自动保存',
-    'feature.autoSave.desc': '实时持久化，工作状态永不丢失',
-    'feature.shortcuts': '高效快捷键',
-    'feature.shortcuts.desc': 'Shift+Enter执行，Esc清空，流畅操作',
+    'feature.coreWorkspace': '统一命令工作台',
+    'feature.coreWorkspace.desc': 'AI提示、快捷执行与多标签终端融为一体',
+    'feature.sessionHistory': '上下文历史管理',
+    'feature.sessionHistory.desc': '历史卡片、收藏与回收站让常用命令随取随用',
+    'feature.richPreview': '丰富回显与预览',
+    'feature.richPreview.desc': '结构化Out区域，/view即时预览Markdown与图片',
 
     // Sections
     'section.favorites': '收藏的对话',
@@ -108,7 +102,26 @@ const translations = {
     // Input
     'input.tabName': '输入对话名称',
     'input.command': '输入命令并按 Shift+Enter...',
+    'input.restart': '会话正在重启，请稍候…',
     'input.description': '添加描述（支持 Markdown）...',
+
+    // Execute button
+    'command.execute.title': '执行命令',
+    'command.execute.aria': '执行当前命令',
+    'command.execute.short': '执行',
+    'command.view.missingPath': '请提供要预览的文件路径',
+    'command.view.unsupported': '暂不支持预览该类型文件',
+    'command.view.remoteUnsupported': '远程会话暂不支持 /view 预览',
+    'command.view.loading': '正在加载预览…',
+    'command.view.tooLarge': '文件过大，无法预览（限制 {{limit}}，实际 {{size}}）',
+    'command.view.notFound': '未找到文件：{{path}}',
+    'command.view.readFailed': '读取文件失败',
+    'command.view.notAvailable': '当前版本暂不支持 /view 功能',
+    'command.view.kind.image': '图像',
+    'command.view.kind.markdown': 'Markdown',
+
+    // Session restart
+    'session.restart.inProgress': '正在重启会话…',
 
     // Cell Input
     'cell.input.placeholder': '输入命令，Shift+Enter 执行',
@@ -132,7 +145,59 @@ const translations = {
     'aria.scrollRight': '向右滚动标签页',
     'aria.newTab': '新建对话',
     'aria.closeTab': '关闭标签页',
-    'aria.settings': '设置'
+    'aria.settings': '设置',
+
+    // Command Suggestions
+    'suggestions.title': '智能建议',
+    'suggestions.hint': '↑↓ 导航 • Enter 选择 • Esc 关闭',
+
+    // Command Palette
+    'commandPalette.placeholder': '输入命令...',
+    'commandPalette.hint': '↑↓ 导航 • Enter 执行 • Esc 关闭',
+    'commandPalette.empty': '未找到匹配的命令',
+    'commandPalette.closeTab.name': '关闭标签页',
+    'commandPalette.closeTab.description': '关闭当前标签页',
+    'commandPalette.clearTerminal.name': '清空终端',
+    'commandPalette.clearTerminal.description': '清空当前终端屏幕',
+    'commandPalette.openSshTmux.name': '打开 SSH 会话',
+    'commandPalette.openSshTmux.description': '启动一个基于 tmux 的 SSH 终端',
+
+    // Context Menus
+    'context.copy': '复制',
+    'context.selectAll': '全选',
+    'context.rename': '重命名',
+    'context.delete': '删除',
+    'context.newFolder': '新建文件夹',
+    'context.newFile': '新建文件',
+    'context.copyPath': '复制路径',
+    'context.refresh': '刷新',
+
+    // Transfers Drawer
+    'transfers.drawerTitle': '文件传输',
+    'transfers.countActive': '{{count}} 个活动任务',
+    'transfers.close': '关闭',
+    'transfers.kind.upload': '上传',
+    'transfers.kind.download': '下载',
+    'transfers.state.running': '进行中',
+    'transfers.state.completed': '已完成',
+    'transfers.state.failed': '失败',
+    'transfers.state.paused': '已暂停',
+    'transfers.state.queued': '排队中',
+    'transfers.button.pause': '暂停',
+    'transfers.button.cancel': '取消',
+    'transfers.button.resume': '继续',
+    'transfers.button.retry': '重试',
+
+    // Conflict Modal
+    'conflict.title': '文件已存在',
+    'conflict.description': '名为“{{fileName}}”的文件已存在于目标位置。请选择操作方式。',
+    'conflict.fieldLabel': '文件名',
+    'conflict.noteLabel': '提示：',
+    'conflict.note': '选择“覆盖”将替换现有文件；使用“重命名”可保留两个文件。',
+    'conflict.cancel': '取消',
+    'conflict.rename': '重命名',
+    'conflict.overwrite': '覆盖',
+    'conflict.error.differentName': '请使用不同的文件名'
   },
 
   'en': {
@@ -182,18 +247,12 @@ const translations = {
     'home.favorite.remove': 'Remove favorite',
 
     // Features
-    'feature.smartTerminal': 'Smart Terminal',
-    'feature.smartTerminal.desc': 'AI-powered assistance with real-time command suggestions',
-    'feature.structuredNotes': 'Structured Notes',
-    'feature.structuredNotes.desc': 'Markdown support, seamlessly blend commands and docs',
-    'feature.sessionManagement': 'Session Management',
-    'feature.sessionManagement.desc': 'Multiple sessions in parallel, restore history anytime',
-    'feature.dualMode': 'Dual Mode',
-    'feature.dualMode.desc': 'Seamlessly switch between Chat and Terminal modes',
-    'feature.autoSave': 'Auto Save',
-    'feature.autoSave.desc': 'Real-time persistence, never lose your work',
-    'feature.shortcuts': 'Efficient Shortcuts',
-    'feature.shortcuts.desc': 'Shift+Enter to execute, Esc to clear, smooth workflow',
+    'feature.coreWorkspace': 'Unified Command Workspace',
+    'feature.coreWorkspace.desc': 'AI suggestions, quick execution, and multi-tab terminals in one place',
+    'feature.sessionHistory': 'Contextual History Management',
+    'feature.sessionHistory.desc': 'History cards, favorites, and trash keep common commands at hand',
+    'feature.richPreview': 'Rich Output & Preview',
+    'feature.richPreview.desc': 'Structured Out area plus /view previews for Markdown and images',
 
     // Sections
     'section.favorites': 'Favorites',
@@ -242,7 +301,26 @@ const translations = {
     // Input
     'input.tabName': 'Enter session name',
     'input.command': 'Type a command and press Shift+Enter...',
+    'input.restart': 'Session is restarting… please wait',
     'input.description': 'Add description (Markdown supported)...',
+
+    // Execute button
+    'command.execute.title': 'Run command',
+    'command.execute.aria': 'Run the current command',
+    'command.execute.short': 'Run',
+    'command.view.missingPath': 'Provide a file path to preview',
+    'command.view.unsupported': 'Preview is not available for this file type yet',
+    'command.view.remoteUnsupported': 'Preview is not available while connected over SSH yet',
+    'command.view.loading': 'Loading preview…',
+    'command.view.tooLarge': 'File is too large to preview (limit {{limit}}, actual {{size}})',
+    'command.view.notFound': 'File not found: {{path}}',
+    'command.view.readFailed': 'Failed to read the file',
+    'command.view.notAvailable': 'The /view preview feature is not available in this build',
+    'command.view.kind.image': 'Image',
+    'command.view.kind.markdown': 'Markdown',
+
+    // Session restart
+    'session.restart.inProgress': 'Restarting session…',
 
     // Cell Input
     'cell.input.placeholder': 'Type a command, Shift+Enter to run',
@@ -266,7 +344,59 @@ const translations = {
     'aria.scrollRight': 'Scroll tabs right',
     'aria.newTab': 'New session',
     'aria.closeTab': 'Close tab',
-    'aria.settings': 'Settings'
+    'aria.settings': 'Settings',
+
+    // Command Suggestions
+    'suggestions.title': 'Suggestions',
+    'suggestions.hint': '↑↓ Navigate • Enter Select • Esc Close',
+
+    // Command Palette
+    'commandPalette.placeholder': 'Type a command...',
+    'commandPalette.hint': '↑↓ Navigate • Enter Execute • Esc Close',
+    'commandPalette.empty': 'No commands found',
+    'commandPalette.closeTab.name': 'Close Tab',
+    'commandPalette.closeTab.description': 'Close current tab',
+    'commandPalette.clearTerminal.name': 'Clear Terminal',
+    'commandPalette.clearTerminal.description': 'Clear terminal screen',
+    'commandPalette.openSshTmux.name': 'Open SSH Session',
+    'commandPalette.openSshTmux.description': 'Start a tmux-backed SSH terminal',
+
+    // Context Menus
+    'context.copy': 'Copy',
+    'context.selectAll': 'Select All',
+    'context.rename': 'Rename',
+    'context.delete': 'Delete',
+    'context.newFolder': 'New Folder',
+    'context.newFile': 'New File',
+    'context.copyPath': 'Copy Path',
+    'context.refresh': 'Refresh',
+
+    // Transfers Drawer
+    'transfers.drawerTitle': 'File Transfers',
+    'transfers.countActive': '{{count}} active',
+    'transfers.close': 'Close',
+    'transfers.kind.upload': 'Upload',
+    'transfers.kind.download': 'Download',
+    'transfers.state.running': 'Running',
+    'transfers.state.completed': 'Completed',
+    'transfers.state.failed': 'Failed',
+    'transfers.state.paused': 'Paused',
+    'transfers.state.queued': 'Queued',
+    'transfers.button.pause': 'Pause',
+    'transfers.button.cancel': 'Cancel',
+    'transfers.button.resume': 'Resume',
+    'transfers.button.retry': 'Retry',
+
+    // Conflict Modal
+    'conflict.title': 'File Already Exists',
+    'conflict.description': 'A file named "{{fileName}}" already exists at the destination. What would you like to do?',
+    'conflict.fieldLabel': 'File Name',
+    'conflict.noteLabel': 'Note:',
+    'conflict.note': 'Choosing "Overwrite" will replace the existing file. Use "Rename" to keep both files.',
+    'conflict.cancel': 'Cancel',
+    'conflict.rename': 'Rename',
+    'conflict.overwrite': 'Overwrite',
+    'conflict.error.differentName': 'Please provide a different file name'
   }
 };
 
@@ -274,6 +404,7 @@ class I18n {
   constructor() {
     this.currentLocale = this.detectLocale();
     this.listeners = [];
+    document.documentElement.lang = this.currentLocale;
   }
 
   detectLocale() {
@@ -307,9 +438,15 @@ class I18n {
     document.documentElement.lang = locale;
   }
 
-  t(key, fallback = key) {
+  t(key, fallback = key, params) {
     const translation = translations[this.currentLocale]?.[key];
-    return translation !== undefined ? translation : fallback;
+    const template = translation !== undefined ? translation : fallback;
+    if (typeof template === 'string' && params && typeof params === 'object') {
+      return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, name) => {
+        return Object.prototype.hasOwnProperty.call(params, name) ? params[name] : '';
+      });
+    }
+    return template;
   }
 
   onChange(listener) {

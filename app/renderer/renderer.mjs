@@ -32,6 +32,10 @@ const scrollToTopBtn = document.getElementById('scrollToTopBtn');
 const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
 const commandInput = document.getElementById('commandInput');
 const commandInputWrapper = document.querySelector('.command-input-wrapper');
+const commandExecuteBtn = document.getElementById('commandExecuteBtn');
+const tabRestartOverlayTemplate = document.getElementById('tabRestartOverlayTemplate');
+let tabRestartOverlayEl = null;
+let restartOverlayOwnerTabId = null;
 const chatContextMenu = document.getElementById('chatContextMenu');
 const tabContextMenu = document.getElementById('tabContextMenu');
 const txCloseBtn = document.getElementById('txCloseBtn');
@@ -104,8 +108,19 @@ function getConfirmDefaultMessage() {
   return i18n.t('modal.confirm.defaultMessage', '确定要执行此操作吗？');
 }
 
-function applyLocaleText() {
-  document.querySelectorAll('[data-i18n]').forEach((el) => {
+function applyLocaleTextWithin(root = document) {
+  const collect = (selector) => {
+    const nodes = [];
+    if (root && root.nodeType === Node.ELEMENT_NODE && root.matches?.(selector)) {
+      nodes.push(root);
+    }
+    if (root && typeof root.querySelectorAll === 'function') {
+      root.querySelectorAll(selector).forEach((el) => nodes.push(el));
+    }
+    return nodes;
+  };
+
+  collect('[data-i18n]').forEach((el) => {
     const key = el.getAttribute('data-i18n');
     if (!key) return;
     if (!el.dataset.i18nOriginal) {
@@ -114,7 +129,7 @@ function applyLocaleText() {
     el.textContent = i18n.t(key, el.dataset.i18nOriginal);
   });
 
-  document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
+  collect('[data-i18n-placeholder]').forEach((el) => {
     const key = el.getAttribute('data-i18n-placeholder');
     if (!key) return;
     if (!el.dataset.i18nPlaceholderOriginal) {
@@ -128,7 +143,7 @@ function applyLocaleText() {
     }
   });
 
-  document.querySelectorAll('[data-i18n-title]').forEach((el) => {
+  collect('[data-i18n-title]').forEach((el) => {
     const key = el.getAttribute('data-i18n-title');
     if (!key) return;
     if (!el.dataset.i18nTitleOriginal) {
@@ -137,6 +152,20 @@ function applyLocaleText() {
     const translated = i18n.t(key, el.dataset.i18nTitleOriginal);
     el.setAttribute('title', translated);
   });
+
+  collect('[data-i18n-aria-label]').forEach((el) => {
+    const key = el.getAttribute('data-i18n-aria-label');
+    if (!key) return;
+    if (!el.dataset.i18nAriaLabelOriginal) {
+      el.dataset.i18nAriaLabelOriginal = el.getAttribute('aria-label') || '';
+    }
+    const translated = i18n.t(key, el.dataset.i18nAriaLabelOriginal);
+    el.setAttribute('aria-label', translated);
+  });
+}
+
+function applyLocaleText() {
+  applyLocaleTextWithin(document);
 }
 
 function applyLocaleTextAndRefresh() {
@@ -144,6 +173,63 @@ function applyLocaleTextAndRefresh() {
   renderTitleForTab(getActiveTab());
   renderDescriptionForTab(getActiveTab());
   renderHome();
+}
+
+function getTabRestartOverlayEl() {
+  if (tabRestartOverlayEl && tabRestartOverlayEl.isConnected) {
+    return tabRestartOverlayEl;
+  }
+  tabRestartOverlayEl = null;
+  return null;
+}
+
+function ensureTabRestartOverlay() {
+  const existing = getTabRestartOverlayEl();
+  if (existing) return existing;
+  if (!tabRestartOverlayTemplate || !chatContainer) return null;
+  const templateRoot = tabRestartOverlayTemplate.content?.firstElementChild || null;
+  if (!templateRoot) return null;
+  const overlay = templateRoot.cloneNode(true);
+  overlay.classList.add('hidden');
+  chatContainer.appendChild(overlay);
+  applyLocaleTextWithin(overlay);
+  tabRestartOverlayEl = overlay;
+  return overlay;
+}
+
+function refreshTabRestartOverlay() {
+  const overlay = ensureTabRestartOverlay();
+  if (!overlay) return;
+  const activeTab = getActiveTab();
+  if (activeTab && activeTab.isRestarting) {
+    restartOverlayOwnerTabId = activeTab.id;
+    overlay.dataset.tabId = activeTab.id;
+    overlay.classList.remove('hidden');
+  } else {
+    overlay.classList.add('hidden');
+    delete overlay.dataset.tabId;
+    restartOverlayOwnerTabId = null;
+  }
+}
+
+function beginTabRestart(tab) {
+  if (!tab) return;
+  tab.isRestarting = true;
+  if (typeof tab.chatTerm?.setRestarting === 'function') {
+    tab.chatTerm.setRestarting(true);
+  }
+  updateTabCommandStatus(tab.id, true);
+  refreshTabRestartOverlay();
+}
+
+function finishTabRestart(tab) {
+  if (!tab) return;
+  tab.isRestarting = false;
+  if (typeof tab.chatTerm?.setRestarting === 'function') {
+    tab.chatTerm.setRestarting(false);
+  }
+  updateTabCommandStatus(tab.id, false);
+  refreshTabRestartOverlay();
 }
 
 if (appTitle) {
@@ -181,6 +267,11 @@ if (recycleBinClearBtn) {
     try {
       const trashItems = state.savedTabs.filter(tab => tab.deleted);
       for (const item of trashItems) {
+        try {
+          await destroyTmuxSessionForSavedTab(item);
+        } catch (err) {
+          console.warn('[recycle] Failed to destroy tmux session for tab', item?.fileName, err);
+        }
         await sm.tabs.remove({ fileName: item.fileName });
       }
       state.savedTabs = state.savedTabs.filter(tab => !tab.deleted);
@@ -728,6 +819,7 @@ function updateSavedTabMeta(fileName, patch = {}) {
       deleted: Boolean(patch.deleted),
       deletedAt: patch.deletedAt || null,
       state: patch.state ?? null,
+      tmuxSession: normalizePersistedTmuxSession(patch.tmuxSession),
       createdAt: patch.createdAt || Date.now(),
       updatedAt: patch.updatedAt || Date.now()
     };
@@ -740,6 +832,7 @@ function updateSavedTabMeta(fileName, patch = {}) {
     if ('deleted' in patch) entry.deleted = Boolean(patch.deleted);
     if ('deletedAt' in patch) entry.deletedAt = patch.deletedAt || null;
     if ('state' in patch) entry.state = patch.state ?? null;
+    if ('tmuxSession' in patch) entry.tmuxSession = normalizePersistedTmuxSession(patch.tmuxSession);
     if ('createdAt' in patch) entry.createdAt = patch.createdAt;
     if ('updatedAt' in patch) entry.updatedAt = patch.updatedAt;
     if (typeof entry.description !== 'string') {
@@ -768,17 +861,109 @@ function updateVisibleMessages(activeId = null) {
   });
 }
 
+function sanitizeSshTargetForPersist(target) {
+  if (!target || typeof target !== 'object') return null;
+  const allowedKeys = ['host', 'port', 'username', 'tmuxSocket', 'prependPath'];
+  const sanitized = {};
+  allowedKeys.forEach((key) => {
+    if (target[key] !== undefined && target[key] !== null) {
+      sanitized[key] = target[key];
+    }
+  });
+  return Object.keys(sanitized).length ? sanitized : null;
+}
+
+function normalizePersistedTmuxSession(meta) {
+  if (!meta || typeof meta !== 'object') return null;
+  const rawName = typeof meta.name === 'string'
+    ? meta.name
+    : (typeof meta.sessionName === 'string' ? meta.sessionName : '');
+  const name = typeof rawName === 'string' ? rawName.trim() : '';
+  if (!name) return null;
+  const mode = typeof meta.mode === 'string'
+    ? meta.mode
+    : (typeof meta.backendMode === 'string' ? meta.backendMode : null);
+  const lastSeen = Number.isFinite(meta.lastSeen) ? meta.lastSeen : Date.now();
+  const source = typeof meta.source === 'string' && meta.source ? meta.source : null;
+  const normalized = {
+    name,
+    mode: mode || null,
+    backendMode: mode || null,
+    source,
+    lastSeen
+  };
+  if (meta.reused !== undefined) {
+    normalized.reused = Boolean(meta.reused);
+  }
+  if (meta.sshTarget && typeof meta.sshTarget === 'object') {
+    normalized.sshTarget = sanitizeSshTargetForPersist(meta.sshTarget);
+  }
+  return normalized;
+}
+
+function buildPersistableTmuxSession(tab) {
+  if (!tab || !tab.tmuxSessionName) return null;
+  const mode = tab.backendMode || tab.mode || null;
+  if (mode !== 'tmux-local' && mode !== 'tmux-ssh') return null;
+  const source = typeof tab.tmuxSession?.source === 'string' && tab.tmuxSession.source
+    ? tab.tmuxSession.source
+    : (tab.tmuxSource || null);
+  const lastSeen = Number.isFinite(tab.tmuxSession?.lastSeen)
+    ? tab.tmuxSession.lastSeen
+    : Date.now();
+  const base = {
+    name: tab.tmuxSessionName,
+    mode,
+    backendMode: mode,
+    source,
+    lastSeen
+  };
+  if (tab.tmuxSession?.reused !== undefined) {
+    base.reused = Boolean(tab.tmuxSession.reused);
+  }
+  if (mode === 'tmux-ssh' && tab.sshTarget) {
+    const sanitizedTarget = sanitizeSshTargetForPersist(tab.sshTarget);
+    if (sanitizedTarget) {
+      base.sshTarget = sanitizedTarget;
+    }
+  }
+  return base;
+}
+
+async function destroyPersistedTmuxSession(sessionMeta) {
+  const normalized = normalizePersistedTmuxSession(sessionMeta);
+  if (!normalized?.name) return false;
+  try {
+    await sm.term.destroyTmuxSession({
+      sessionName: normalized.name,
+      mode: normalized.mode || normalized.backendMode || 'tmux-local',
+      sshTarget: normalized.sshTarget || null
+    });
+    return true;
+  } catch (err) {
+    console.warn('[tmux] Failed to destroy persisted session:', err);
+    return false;
+  }
+}
+
+async function destroyTmuxSessionForSavedTab(meta) {
+  if (!meta) return false;
+  return destroyPersistedTmuxSession(meta.tmuxSession);
+}
+
 async function persistTab(tab) {
   if (!tab?.fileName || !tab?.chatTerm) return false;
   try {
     const serialized = tab.chatTerm.serializeState();
+    const tmuxSession = buildPersistableTmuxSession(tab);
     const res = await sm.tabs.save({
       fileName: tab.fileName,
       title: tab.title,
       state: serialized,
       favorite: tab.favorite,
       description: typeof tab.description === 'string' ? tab.description : '',
-      customTitle: Boolean(tab.customTitle)
+      customTitle: Boolean(tab.customTitle),
+      tmuxSession
     });
     const payload = res?.data || {};
     const normalizedFavorite = typeof payload.favorite === 'boolean' ? payload.favorite : tab.favorite;
@@ -790,11 +975,20 @@ async function persistTab(tab) {
       : Boolean(tab.customTitle);
     const normalizedDeleted = Boolean(payload.deleted);
     const normalizedDeletedAt = normalizedDeleted ? (payload.deletedAt || tab.deletedAt || null) : null;
+    const normalizedTmuxSession = payload.tmuxSession !== undefined
+      ? normalizePersistedTmuxSession(payload.tmuxSession)
+      : normalizePersistedTmuxSession(tmuxSession);
     tab.favorite = normalizedFavorite;
     tab.description = normalizedDescription;
     tab.customTitle = normalizedCustomTitle;
     tab.deleted = normalizedDeleted;
     tab.deletedAt = normalizedDeletedAt;
+    tab.tmuxSession = normalizedTmuxSession || null;
+    if (normalizedTmuxSession?.name) {
+      tab.tmuxSessionName = normalizedTmuxSession.name;
+    } else {
+      tab.tmuxSessionName = null;
+    }
     updateSavedTabMeta(tab.fileName, {
       title: tab.title,
       favorite: normalizedFavorite,
@@ -803,6 +997,7 @@ async function persistTab(tab) {
       deleted: normalizedDeleted,
       deletedAt: normalizedDeletedAt,
       state: serialized,
+      tmuxSession: normalizedTmuxSession || null,
       updatedAt: payload.updatedAt || Date.now()
     });
     renderHome();
@@ -1194,16 +1389,20 @@ async function refreshSavedTabsList() {
   try {
     const res = await sm.tabs.list();
     if (res?.ok && Array.isArray(res.data)) {
-      state.savedTabs = res.data.map(item => ({
-        ...item,
-        favorite: Boolean(item.favorite),
-        description: typeof item.description === 'string' ? item.description : '',
-        customTitle: typeof item.customTitle === 'boolean'
-          ? item.customTitle
-          : Boolean(item.title && !/^Chat-\d+$/i.test(item.title)),
-        deleted: Boolean(item.deleted),
-        deletedAt: item.deletedAt || null
-      }));
+      state.savedTabs = res.data.map(item => {
+        const normalizedTmux = normalizePersistedTmuxSession(item.tmuxSession);
+        return {
+          ...item,
+          favorite: Boolean(item.favorite),
+          description: typeof item.description === 'string' ? item.description : '',
+          customTitle: typeof item.customTitle === 'boolean'
+            ? item.customTitle
+            : Boolean(item.title && !/^Chat-\d+$/i.test(item.title)),
+          deleted: Boolean(item.deleted),
+          deletedAt: item.deletedAt || null,
+          tmuxSession: normalizedTmux
+        };
+      });
     } else {
       state.savedTabs = [];
     }
@@ -1984,7 +2183,8 @@ async function openConversation(fileName) {
       state: meta.state || null,
       favorite: meta.favorite || false,
       description: typeof meta.description === 'string' ? meta.description : '',
-      customTitle: typeof meta.customTitle === 'boolean' ? meta.customTitle : true
+      customTitle: typeof meta.customTitle === 'boolean' ? meta.customTitle : true,
+      tmuxSession: meta.tmuxSession || null
     });
   } catch (err) {
     console.error('[home] Failed to open conversation:', err);
@@ -2029,7 +2229,8 @@ async function toggleFavoriteForSaved(meta, desiredFavorite) {
     state: meta.state || null,
     favorite: next,
     description: typeof meta.description === 'string' ? meta.description : '',
-    customTitle: typeof meta.customTitle === 'boolean' ? meta.customTitle : true
+    customTitle: typeof meta.customTitle === 'boolean' ? meta.customTitle : true,
+    tmuxSession: meta.tmuxSession || null
   };
 
   try {
@@ -2041,9 +2242,11 @@ async function toggleFavoriteForSaved(meta, desiredFavorite) {
     const normalizedCustomTitle = typeof res?.data?.customTitle === 'boolean'
       ? res.data.customTitle
       : (typeof meta.customTitle === 'boolean' ? meta.customTitle : true);
+    const normalizedTmuxSession = normalizePersistedTmuxSession(res?.data?.tmuxSession ?? meta.tmuxSession);
     meta.favorite = normalizedFavorite;
     meta.description = normalizedDescription;
     meta.customTitle = normalizedCustomTitle;
+    meta.tmuxSession = normalizedTmuxSession;
     if (res?.data?.updatedAt) {
       meta.updatedAt = res.data.updatedAt;
     } else {
@@ -2053,7 +2256,8 @@ async function toggleFavoriteForSaved(meta, desiredFavorite) {
       favorite: normalizedFavorite,
       description: normalizedDescription,
       customTitle: normalizedCustomTitle,
-      updatedAt: meta.updatedAt
+      updatedAt: meta.updatedAt,
+      tmuxSession: normalizedTmuxSession
     });
     await refreshSavedTabsList();
     renderTabs();
@@ -2077,16 +2281,17 @@ async function trashConversation(fileName) {
     const openTabs = state.tabs.filter(tab => tab.fileName === fileName);
     const isCurrentlyOpen = openTabs.some(tab => tab.id === state.activeId);
 
-    const payload = {
-      fileName,
-      title: meta?.title || 'Chat',
-      state: meta?.state || null,
-      favorite: false,
-      description: typeof meta?.description === 'string' ? meta.description : '',
-      customTitle: typeof meta?.customTitle === 'boolean' ? meta.customTitle : false,
-      deleted: true,
-      deletedAt
-    };
+  const payload = {
+    fileName,
+    title: meta?.title || 'Chat',
+    state: meta?.state || null,
+    favorite: false,
+    description: typeof meta?.description === 'string' ? meta.description : '',
+    customTitle: typeof meta?.customTitle === 'boolean' ? meta.customTitle : false,
+    deleted: true,
+    deletedAt,
+    tmuxSession: meta?.tmuxSession || null
+  };
     const res = await sm.tabs.save(payload);
     if (!res?.ok) {
       alert('移动到回收站失败：' + (res?.error || '未知错误'));
@@ -2096,11 +2301,13 @@ async function trashConversation(fileName) {
       meta.deleted = true;
       meta.deletedAt = deletedAt;
       meta.favorite = false;
+      meta.tmuxSession = normalizePersistedTmuxSession(res?.data?.tmuxSession ?? meta.tmuxSession);
       updateSavedTabMeta(fileName, {
         deleted: true,
         deletedAt,
         favorite: false,
-        updatedAt: deletedAt
+        updatedAt: deletedAt,
+        tmuxSession: meta.tmuxSession
       });
     }
 
@@ -2109,6 +2316,10 @@ async function trashConversation(fileName) {
       tab.favorite = false;
       tab.deleted = true;
       tab.deletedAt = deletedAt;
+      if (meta?.tmuxSession) {
+        tab.tmuxSession = meta.tmuxSession;
+        tab.tmuxSessionName = meta.tmuxSession?.name || tab.tmuxSessionName || null;
+      }
     });
     await Promise.all(openTabs.map(tab => closeTab(tab.id)));
 
@@ -2159,7 +2370,8 @@ async function restoreConversation(fileName) {
       description: typeof meta.description === 'string' ? meta.description : '',
       customTitle: typeof meta.customTitle === 'boolean' ? meta.customTitle : false,
       deleted: false,
-      deletedAt: null
+      deletedAt: null,
+      tmuxSession: meta.tmuxSession || null
     };
     const res = await sm.tabs.save(payload);
     if (!res?.ok) {
@@ -2175,18 +2387,21 @@ async function restoreConversation(fileName) {
       : Boolean(meta.customTitle);
     const normalizedDeleted = Boolean(res?.data?.deleted);
     const normalizedDeletedAt = normalizedDeleted ? (res?.data?.deletedAt || null) : null;
+    const normalizedTmuxSession = normalizePersistedTmuxSession(res?.data?.tmuxSession ?? meta.tmuxSession);
     meta.favorite = normalizedFavorite;
     meta.description = normalizedDescription;
     meta.customTitle = normalizedCustomTitle;
     meta.deleted = normalizedDeleted;
     meta.deletedAt = normalizedDeletedAt;
+    meta.tmuxSession = normalizedTmuxSession;
     updateSavedTabMeta(fileName, {
       deleted: normalizedDeleted,
       deletedAt: normalizedDeletedAt,
       favorite: normalizedFavorite,
       description: normalizedDescription,
       customTitle: normalizedCustomTitle,
-      updatedAt: res?.data?.updatedAt || Date.now()
+      updatedAt: res?.data?.updatedAt || Date.now(),
+      tmuxSession: normalizedTmuxSession
     });
     const openTabs = state.tabs.filter(tab => tab.fileName === fileName);
     openTabs.forEach(tab => {
@@ -2195,6 +2410,8 @@ async function restoreConversation(fileName) {
       tab.favorite = normalizedFavorite;
       tab.description = normalizedDescription;
       tab.customTitle = normalizedCustomTitle;
+      tab.tmuxSession = normalizedTmuxSession;
+      tab.tmuxSessionName = normalizedTmuxSession?.name || tab.tmuxSessionName || null;
     });
     if (openTabs.length > 0) {
       renderTabs();
@@ -2232,6 +2449,7 @@ async function init() {
   applySplitRatio();
   setupChatContextMenu();
   setupTabContextMenu();
+  refreshTransfers();
 
   // 注册全局命令事件处理器（只注册一次）
   setupCommandEventHandlers();
@@ -2272,7 +2490,8 @@ async function init() {
       state: meta.state || null,
       favorite: meta.favorite || false,
       description: typeof meta.description === 'string' ? meta.description : '',
-      customTitle: typeof meta.customTitle === 'boolean' ? meta.customTitle : true
+      customTitle: typeof meta.customTitle === 'boolean' ? meta.customTitle : true,
+      tmuxSession: meta.tmuxSession || null
     });
     openedCount += 1;
   }
@@ -2516,135 +2735,221 @@ async function restartTabSession(tabId) {
   // Persist current tab state first (best-effort)
   try { await persistTab(t); } catch (_) {}
 
-  // Show blocking overlay and disable interactions
-  const overlay = document.getElementById('sessionRestartOverlay');
-  try {
-    overlay?.classList.remove('hidden');
-  } catch (_) {}
-  const commandInputEl = document.getElementById('commandInput');
-  const prevInputDisabled = commandInputEl ? commandInputEl.disabled : false;
-  if (commandInputEl) commandInputEl.disabled = true;
-
-  // If there is a running command in ChatTerminal, stop/clear it to avoid dangling state
-  try {
-    if (t.chatTerm) {
-      if (t.chatTerm.currentCommand?.terminationTimer) {
-        clearTimeout(t.chatTerm.currentCommand.terminationTimer);
-        t.chatTerm.currentCommand.terminationTimer = null;
-      }
-      t.chatTerm.currentCommand = null;
-      t.chatTerm.isCommandRunning = false;
-      t.chatTerm.commandQueue = [];
-      // Reset SSH context; new PTY means new session
-      t.chatTerm.pendingSshTarget = null;
-      t.chatTerm.activeSshTarget = null;
-      if (typeof t.chatTerm.updateInputAffordances === 'function') {
-        t.chatTerm.updateInputAffordances();
-      }
-    }
-  } catch (_) {}
-
-  // Gracefully kill existing PTY
-  try { sm.term.forceKill({ ptyId: t.ptyId }); } catch (_) {}
-
-  // Dispose and recreate xterm instance to avoid stale onData handlers
-  try { if (t.term && typeof t.term.dispose === 'function') t.term.dispose(); } catch (_) {}
-
-  // Create a new xterm with the same theme as addNewTab
-  const isWin = navigator.platform.toLowerCase().includes('win');
-  const xtermTheme = await (async () => { try { return await loadXtermTheme(); } catch { return {}; } })();
-  const term = new Terminal({
-    cursorBlink: true,
-    scrollback: 10000,
-    fontSize: 14,
-    fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-    letterSpacing: 0,
-    lineHeight: 1,
-    allowTransparency: false,
-    theme: {
-      ...xtermTheme,
-      foreground: '#E8ECF2',
-      background: '#0B1220'
-    }
-  });
-
-  // Spawn a fresh shell for this tab
-  const preferredShell = isWin ? null : '/bin/bash';
-  const spawnRes = await sm.term.spawn({ tabId, cols: 120, rows: 30, preferUTF8: true, shellName: preferredShell });
-  if (!spawnRes?.ok) {
-    alert('Failed to restart session: ' + (spawnRes?.error || 'unknown error'));
-    return;
-  }
-  const { ptyId } = spawnRes.data || {};
-
-  // Define writer/resizer bound to new ptyId
-  const writer = (d) => {
-    const res = sm.term.write({ ptyId, data: d });
-    if (res && typeof res.then === 'function') {
-      res.catch((err) => console.error('[term.write] failed', { ptyId, err }));
-    }
-    return res;
+  beginTabRestart(t);
+  let restartFinalized = false;
+  const finalizeRestart = () => {
+    if (restartFinalized) return;
+    restartFinalized = true;
+    finishTabRestart(t);
   };
-  const resizer = (c, r) => sm.term.resize({ ptyId, cols: c, rows: r });
+  let term = null;
+  let spawnRes = null;
 
-  // Connect chat terminal to the new writer
-  if (t.chatTerm && typeof t.chatTerm.setWriter === 'function') {
-    t.chatTerm.setWriter(writer);
-    // Reset readiness so input affordances update when ready
-    t.chatTerm.terminalReady = false;
-    t.chatTerm.updateInputAffordances?.();
-    // Rebind getTabState so commands target the new PTY id
+  try {
+    // If there is a running command in ChatTerminal, stop/clear it to avoid dangling state
     try {
-      t.chatTerm.getTabState = () => ({
-        id: ptyId,
-        ptyId: ptyId,
-        mode: t.mode || 'pty',
-        tabId: t.id,
-        cwd: t.cwd || null
-      });
-      if (typeof t.chatTerm.rebindLiveReferences === 'function') {
-        t.chatTerm.rebindLiveReferences();
+      if (t.chatTerm) {
+        if (t.chatTerm.currentCommand?.terminationTimer) {
+          clearTimeout(t.chatTerm.currentCommand.terminationTimer);
+          t.chatTerm.currentCommand.terminationTimer = null;
+        }
+        t.chatTerm.currentCommand = null;
+        t.chatTerm.isCommandRunning = false;
+        t.chatTerm.commandQueue = [];
+        // Reset SSH context; new PTY means new session
+        t.chatTerm.pendingSshTarget = null;
+        t.chatTerm.activeSshTarget = null;
+        if (typeof t.chatTerm.updateInputAffordances === 'function') {
+          t.chatTerm.updateInputAffordances();
+        }
       }
     } catch (_) {}
+
+    // Gracefully kill existing PTY
+    try { sm.term.forceKill({ ptyId: t.ptyId }); } catch (_) {}
+
+    // Dispose and recreate xterm instance to avoid stale onData handlers
+    try { if (t.term && typeof t.term.dispose === 'function') t.term.dispose(); } catch (_) {}
+
+    // Create a new xterm with the same theme as addNewTab
+    const isWin = navigator.platform.toLowerCase().includes('win');
+    const xtermTheme = await (async () => { try { return await loadXtermTheme(); } catch { return {}; } })();
+    term = new Terminal({
+      cursorBlink: true,
+      scrollback: 10000,
+      fontSize: 14,
+      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      letterSpacing: 0,
+      lineHeight: 1,
+      allowTransparency: false,
+      theme: {
+        ...xtermTheme,
+        foreground: '#E8ECF2',
+        background: '#0B1220'
+      }
+    });
+
+    // Spawn a fresh shell for this tab
+    const preferredShell = isWin ? null : '/bin/bash';
+    const spawnPayloadBase = { tabId, cols: 120, rows: 30, preferUTF8: true, shellName: preferredShell };
+    const previousBackendMode = t.backendMode || t.mode || 'pty';
+
+    if (previousBackendMode === 'tmux-ssh' && t.sshTarget) {
+      try {
+        spawnRes = await sm.term.spawn({
+          ...spawnPayloadBase,
+          mode: 'tmux-ssh',
+          sshTarget: t.sshTarget,
+          tmux: t.tmuxSession?.name ? { sessionName: t.tmuxSession.name } : (t.tmuxSessionName ? { sessionName: t.tmuxSessionName } : {})
+        });
+      } catch (err) {
+        console.error('[restartTabSession] remote tmux spawn failed:', err);
+      }
+      if (!spawnRes?.ok) {
+        alert('Failed to reconnect SSH session: ' + (spawnRes?.error || 'unknown error'));
+        finalizeRestart();
+        return;
+      }
+    } else {
+      let attemptedTmux = false;
+      if (!isWin) {
+        attemptedTmux = true;
+        const existingSessionName = t.tmuxSession?.name || t.tmuxSessionName;
+        const tmuxPayload = {
+          ...spawnPayloadBase,
+          mode: 'tmux-local',
+          tmux: existingSessionName ? { sessionName: existingSessionName } : {}
+        };
+        try {
+          spawnRes = await sm.term.spawn(tmuxPayload);
+        } catch (err) {
+          console.warn('[restartTabSession] tmux spawn failed:', err);
+        }
+      }
+      if (!spawnRes?.ok) {
+        if (attemptedTmux) {
+          console.warn('[restartTabSession] falling back to regular PTY:', spawnRes?.error);
+        }
+        spawnRes = await sm.term.spawn(spawnPayloadBase);
+      }
+      if (!spawnRes?.ok) {
+        alert('Failed to restart session: ' + (spawnRes?.error || 'unknown error'));
+        finalizeRestart();
+        return;
+      }
+    }
+  } catch (spawnErr) {
+    console.error('[restartTabSession] spawn error', spawnErr);
+    finalizeRestart();
+    return;
   }
+
+  try {
+    const { ptyId } = spawnRes.data || {};
+    const spawnedModeRaw = spawnRes.data?.mode || 'pty';
+    t.backendMode = spawnedModeRaw;
+    t.mode = spawnedModeRaw === 'tmux-ssh' ? 'ssh' : spawnedModeRaw;
+    t.tmuxSessionName = spawnRes.data?.sessionName || null;
+    const tmuxSource = spawnRes.data?.tmuxSource || null;
+    t.tmuxSource = tmuxSource;
+    const tmuxReused = Boolean(spawnRes.data?.reusedSession);
+    if (spawnedModeRaw === 'tmux-ssh') {
+      t.tmuxSession = t.tmuxSessionName ? {
+        name: t.tmuxSessionName,
+        mode: spawnedModeRaw,
+        backendMode: spawnedModeRaw,
+        source: tmuxSource || null,
+        lastSeen: Date.now(),
+        reused: tmuxReused,
+        sshTarget: t.sshTarget ? { ...t.sshTarget } : null
+      } : null;
+    } else if (spawnedModeRaw === 'tmux-local') {
+      t.tmuxSession = t.tmuxSessionName ? {
+        name: t.tmuxSessionName,
+        mode: spawnedModeRaw,
+        backendMode: spawnedModeRaw,
+        source: tmuxSource || null,
+        lastSeen: Date.now(),
+        reused: tmuxReused,
+        sshTarget: null
+      } : null;
+    } else {
+      t.tmuxSession = null;
+    }
+    if (spawnedModeRaw !== 'tmux-ssh') {
+      t.sshTarget = null;
+    }
+
+  // Define writer/resizer bound to new ptyId
+    const writer = (d) => {
+      const res = sm.term.write({ ptyId, data: d });
+      if (res && typeof res.then === 'function') {
+        res.catch((err) => console.error('[term.write] failed', { ptyId, err }));
+      }
+      return res;
+    };
+    const resizer = (c, r) => sm.term.resize({ ptyId, cols: c, rows: r });
+
+  // Connect chat terminal to the new writer
+    if (t.chatTerm && typeof t.chatTerm.setWriter === 'function') {
+      t.chatTerm.setWriter(writer);
+      // Reset readiness so input affordances update when ready
+      t.chatTerm.terminalReady = false;
+      t.chatTerm.updateInputAffordances?.();
+      // Rebind getTabState so commands target the new PTY id
+      try {
+        t.chatTerm.getTabState = () => ({
+          id: ptyId,
+          ptyId: ptyId,
+          mode: t.mode || 'pty',
+          tabId: t.id,
+          cwd: t.cwd || null
+        });
+        if (typeof t.chatTerm.rebindLiveReferences === 'function') {
+          t.chatTerm.rebindLiveReferences();
+        }
+      } catch (_) {}
+    }
 
   // Hook xterm keyboard to writer
   try { term.onData(data => writer(data)); } catch (_) {}
 
   // Route PTY output to xterm and chat terminal via shared handler
-  let firstDataSeen = false;
-  const dataHandler = (m) => {
-    if (m.ptyId === ptyId) {
-      handleTermData(tabId, term, t.chatTerm, m.data);
-      if (!firstDataSeen) {
-        firstDataSeen = true;
-        // Hide overlay on first data (terminal becomes responsive)
-        try { overlay?.classList.add('hidden'); } catch (_) {}
-        if (commandInputEl) commandInputEl.disabled = prevInputDisabled;
+    let firstDataSeen = false;
+    const dataHandler = (m) => {
+      if (m.ptyId === ptyId) {
+        handleTermData(tabId, term, t.chatTerm, m.data);
+        if (!firstDataSeen) {
+          firstDataSeen = true;
+          finalizeRestart();
+        }
       }
-    }
-  };
-  try { sm.term.onData(dataHandler); } catch (_) {}
+    };
+    try { sm.term.onData(dataHandler); } catch (_) {}
 
   // Update tab entry
-  t.ptyId = ptyId;
-  t.term = term;
-  t.write = writer;
-  t.resize = resizer;
-  t.dataHandler = dataHandler;
-  t.terminalReady = false;
+    t.ptyId = ptyId;
+    t.term = term;
+    t.write = writer;
+    t.resize = resizer;
+    t.dataHandler = dataHandler;
+    t.terminalReady = false;
 
   // If this tab is active and in Terminal view, open the xterm into the pane
-  const isActiveNow = t.id === state.activeId;
-  if (isActiveNow && !state.useChatMode) {
-    while (termEl.firstChild) termEl.removeChild(termEl.firstChild);
-    term.open(termEl);
-    term.focus();
-    fitTerminalToPane();
-  }
+    const isActiveNow = t.id === state.activeId;
+    if (isActiveNow && !state.useChatMode) {
+      while (termEl.firstChild) termEl.removeChild(termEl.firstChild);
+      term.open(termEl);
+      term.focus();
+      fitTerminalToPane();
+    }
 
   // Ensure the title/path reflect the new session once CWD is reported
-  updateCurrentPathDisplay();
+    updateCurrentPathDisplay();
+  } catch (err) {
+    console.error('[restartTabSession] unexpected error', err);
+    finalizeRestart();
+  }
 }
 
 async function closeOtherTabs(keepTabId) {
@@ -2889,7 +3194,11 @@ async function addNewTab(options = {}) {
     state: savedState = null,
     favorite: initialFavorite = false,
     description: initialDescription = '',
-    customTitle: initialCustomTitle = Boolean(providedTitle)
+    customTitle: initialCustomTitle = Boolean(providedTitle),
+    spawnMode = 'auto',
+    sshTarget: initialSshTarget = null,
+    tmuxSession: presetTmuxSession = null,
+    tmuxSessionName: presetTmuxSessionName = null
   } = options || {};
 
   const activeTab = state.tabs.find(x => x.id === state.activeId);
@@ -2923,7 +3232,7 @@ async function addNewTab(options = {}) {
   }
 
   // Initialize chat terminal
-  const chatTerm = new ChatTerminal(chatContainer, commandInput, tabMessagesEl || chatMessagesHost, null);
+  const chatTerm = new ChatTerminal(chatContainer, commandInput, tabMessagesEl || chatMessagesHost, null, commandExecuteBtn);
   const messagesEl = chatTerm?.messages || tabMessagesEl || null;
   if (messagesEl) {
     messagesEl.classList.add('chat-messages-pane');
@@ -2945,9 +3254,78 @@ async function addNewTab(options = {}) {
   // Prefer bash on POSIX to avoid zsh reading-from-stdin quirks when PTY is unavailable
   const isWin = navigator.platform.toLowerCase().includes('win');
   const preferredShell = isWin ? null : '/bin/bash';
-  const spawnRes = await sm.term.spawn({ tabId: id, cols: 120, rows: 30, preferUTF8: true, shellName: preferredShell });
-  if (!spawnRes.ok) { alert('Failed to spawn terminal: ' + spawnRes.error); return; }
-  const { ptyId, mode: termMode } = spawnRes.data;
+  const baseSpawnPayload = { tabId: id, cols: 120, rows: 30, preferUTF8: true, shellName: preferredShell };
+  let spawnRes = null;
+  let backendMode = 'pty';
+  let logicalMode = 'pty';
+  let tmuxSessionName = (presetTmuxSession && presetTmuxSession.name) || presetTmuxSessionName || null;
+  let tmuxSession = presetTmuxSession ? { ...presetTmuxSession } : (tmuxSessionName ? { name: tmuxSessionName } : null);
+  let sshTarget = initialSshTarget ? { ...initialSshTarget } : null;
+  let attemptedLocalTmux = false;
+  let effectiveSpawnMode = spawnMode;
+
+  if (effectiveSpawnMode !== 'tmux-ssh' && presetTmuxSession && presetTmuxSession.backendMode === 'tmux-ssh') {
+    if (presetTmuxSession.sshTarget) {
+      sshTarget = { ...presetTmuxSession.sshTarget };
+      effectiveSpawnMode = 'tmux-ssh';
+    }
+  }
+
+  if (effectiveSpawnMode === 'tmux-ssh' && sshTarget) {
+    try {
+      spawnRes = await sm.term.spawn({
+        ...baseSpawnPayload,
+        mode: 'tmux-ssh',
+        sshTarget,
+        tmux: tmuxSessionName ? { sessionName: tmuxSessionName } : {}
+      });
+    } catch (err) {
+      console.error('[addNewTab] remote tmux spawn failed:', err);
+    }
+  } else {
+    if (!isWin) {
+      attemptedLocalTmux = true;
+      try {
+        const tmuxPayload = {
+          ...baseSpawnPayload,
+          mode: 'tmux-local',
+          tmux: tmuxSessionName ? { sessionName: tmuxSessionName } : {}
+        };
+        spawnRes = await sm.term.spawn(tmuxPayload);
+      } catch (err) {
+        console.warn('[addNewTab] tmux spawn failed:', err);
+      }
+    }
+    if (!spawnRes?.ok) {
+      if (attemptedLocalTmux) console.warn('[addNewTab] falling back to PTY:', spawnRes?.error);
+      spawnRes = await sm.term.spawn(baseSpawnPayload);
+    }
+  }
+
+  if (!spawnRes?.ok) { alert('Failed to spawn terminal: ' + (spawnRes?.error || 'unknown error')); return; }
+  const { ptyId } = spawnRes.data || {};
+  backendMode = spawnRes.data?.mode || 'pty';
+  logicalMode = backendMode === 'tmux-ssh' ? 'ssh' : backendMode;
+  tmuxSessionName = spawnRes.data?.sessionName || tmuxSessionName;
+  const tmuxSource = spawnRes.data?.tmuxSource || null;
+  const tmuxReused = Boolean(spawnRes.data?.reusedSession);
+  const tmuxLastSeen = Date.now();
+  if (tmuxSessionName && (backendMode === 'tmux-local' || backendMode === 'tmux-ssh')) {
+    tmuxSession = {
+      name: tmuxSessionName,
+      mode: backendMode,
+      backendMode,
+      source: tmuxSource || null,
+      lastSeen: tmuxLastSeen,
+      reused: tmuxReused,
+      sshTarget: backendMode === 'tmux-ssh' ? (sshTarget ? { ...sshTarget } : null) : null
+    };
+  } else {
+    tmuxSession = null;
+  }
+  if (backendMode !== 'tmux-ssh') {
+    sshTarget = null;
+  }
   try { if (window?.localStorage?.getItem('sm.debugTerm')) console.log('[term.spawn] ptyId', ptyId); } catch (_) {}
   const writer = (d) => {
     const bytes = typeof d === 'string' ? d.length : 0;
@@ -3047,12 +3425,17 @@ async function addNewTab(options = {}) {
     title: effectiveTitle,
     fileName,
     ptyId,
-    mode: termMode || 'pty',
+    mode: logicalMode || 'pty',
+    backendMode,
     cwd: home,
     term,
     chatTerm,
     write: writer,
     resize: resizer,
+    tmuxSessionName: tmuxSessionName || null,
+    tmuxSession: tmuxSession || null,
+    tmuxSource,
+    sshTarget: sshTarget || null,
     saveTimer: null,
     favorite: Boolean(initialFavorite),
     description: typeof initialDescription === 'string' ? initialDescription : '',
@@ -3062,6 +3445,7 @@ async function addNewTab(options = {}) {
     dataHandler: dataHandler, // Store handler reference for cleanup
     messagesEl,
     commandStatus: 'idle',
+    isRestarting: false,
     // Don't mark as ready until listeners are fully attached to avoid race
     // where a fast first command runs before onData routing is installed.
     terminalReady: false
@@ -3073,8 +3457,10 @@ async function addNewTab(options = {}) {
       id: ptyId,
       ptyId: ptyId,
       mode: tabEntry.mode,
+      backendMode: tabEntry.backendMode || tabEntry.mode,
       tabId: tabEntry.id,
-      cwd: tabEntry.cwd || null
+      cwd: tabEntry.cwd || null,
+      sshTarget: tabEntry.sshTarget || null
     });
     chatTerm.onCommandRunningChange = ({ isRunning } = {}) => {
       updateTabCommandStatus(tabEntry.id, Boolean(isRunning));
@@ -3157,6 +3543,7 @@ function setActiveTab(id, { skipSave = false, smooth = false } = {}) {
     scheduleSessionSave();
     renderTitleForTab(null);
     renderDescriptionForTab(null);
+    refreshTabRestartOverlay();
     return;
   }
 
@@ -3245,8 +3632,10 @@ function setActiveTab(id, { skipSave = false, smooth = false } = {}) {
 
     renderTabs();
     scheduleScrollUpdate();
+    refreshTabRestartOverlay();
   };
 
+  refreshTabRestartOverlay();
   if (smooth && typeof requestAnimationFrame === 'function' && !isSameTab) {
     requestAnimationFrame(performSwitch);
   } else {
@@ -3258,6 +3647,9 @@ async function closeTab(id) {
   const i = state.tabs.findIndex(x => x.id === id);
   if (i >= 0) {
     const t = state.tabs[i];
+    if (t.isRestarting) {
+      finishTabRestart(t);
+    }
     try {
       await persistTab(t);
     } catch (err) {
@@ -3267,7 +3659,8 @@ async function closeTab(id) {
       title: t.title,
       favorite: Boolean(t.favorite),
       description: typeof t.description === 'string' ? t.description : '',
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      tmuxSession: t.tmuxSession || null
     });
     sm.term.kill({ ptyId: t.ptyId });
     t.term.dispose();
@@ -3277,6 +3670,14 @@ async function closeTab(id) {
     }
     if (t.messagesEl && t.messagesEl.parentNode) {
       t.messagesEl.parentNode.removeChild(t.messagesEl);
+    }
+    if (restartOverlayOwnerTabId === t.id) {
+      restartOverlayOwnerTabId = null;
+      const overlay = getTabRestartOverlayEl();
+      if (overlay) {
+        overlay.classList.add('hidden');
+        delete overlay.dataset.tabId;
+      }
     }
     state.tabs.splice(i, 1);
     const nextTab = state.tabs[i] || state.tabs[i - 1] || state.tabs[0] || null;
@@ -3298,6 +3699,94 @@ async function closeTab(id) {
       // Already logged inside refreshSavedTabsList
     }
     scheduleScrollUpdate();
+  }
+}
+
+let cachedDefaultUsername = null;
+async function getDefaultUsername() {
+  if (cachedDefaultUsername) return cachedDefaultUsername;
+  try {
+    const res = await window.sm.app.getHomeDir();
+    const homePath = res?.ok ? res.data : null;
+    if (homePath) {
+      const parts = String(homePath).split(/[\\/]/).filter(Boolean);
+      cachedDefaultUsername = parts.length ? parts[parts.length - 1] : null;
+    }
+  } catch (_) {
+    cachedDefaultUsername = null;
+  }
+  return cachedDefaultUsername;
+}
+
+function parseSshTargetSpec(spec) {
+  if (!spec) return null;
+  const input = String(spec).trim();
+  if (!input) return null;
+  let remainder = input;
+  let user = null;
+
+  const atIndex = input.lastIndexOf('@');
+  if (atIndex > 0 && !input.slice(atIndex + 1).includes(' ')) {
+    user = input.slice(0, atIndex);
+    remainder = input.slice(atIndex + 1);
+  }
+
+  let host = remainder;
+  let port = null;
+  const ipv6Match = remainder.match(/^\[([^\]]+)\](?::(\d+))?$/);
+  if (ipv6Match) {
+    host = ipv6Match[1];
+    port = ipv6Match[2] || null;
+  } else {
+    const parts = remainder.split(':');
+    if (parts.length > 1 && /^\d+$/.test(parts[parts.length - 1])) {
+      port = parts.pop();
+      host = parts.join(':');
+    }
+  }
+
+  if (!host) return null;
+  return { user: user || null, host, port: port ? Number(port) : null };
+}
+
+async function promptOpenSshTmuxTab() {
+  const targetSpec = window.prompt('SSH target (user@host[:port])');
+  if (!targetSpec) return;
+  const parsed = parseSshTargetSpec(targetSpec);
+  if (!parsed) {
+    alert('Invalid SSH target');
+    return;
+  }
+  let username = parsed.user;
+  if (!username) {
+    username = await getDefaultUsername();
+  }
+  if (!username) {
+    const promptUser = window.prompt('SSH username');
+    if (!promptUser) {
+      alert('Username is required for SSH connections.');
+      return;
+    }
+    username = promptUser.trim();
+  }
+  const sshTarget = {
+    host: parsed.host,
+    username,
+    port: parsed.port || undefined,
+    agentForward: true
+  };
+  const defaultTitle = `${username}@${parsed.host}`;
+  const titleInput = window.prompt('Tab title (optional)', defaultTitle) || defaultTitle;
+
+  try {
+    await addNewTab({
+      title: titleInput,
+      customTitle: Boolean(titleInput),
+      spawnMode: 'tmux-ssh',
+      sshTarget
+    });
+  } catch (err) {
+    alert('Failed to open SSH session: ' + (err?.message || err));
   }
 }
 
@@ -3628,18 +4117,20 @@ async function refreshTransfers() {
   const res = await sm.tx.list(); if (!res.ok) return;
   const list = res.data;
   txList.innerHTML = '';
-  txCount.textContent = `${list.filter(x=>x.state==='running').length} running`;
+  const runningCount = list.filter(x => x.state === 'running').length;
+  txCount.textContent = i18n.t('transfers.countActive', `${runningCount} running`, { count: runningCount });
   for (const t of list.slice(-50)) {
     const el = document.createElement('div'); el.className='transfer-item';
 
     // Transfer info
     const info = document.createElement('div'); info.className='transfer-info';
     const name = document.createElement('div'); name.className='transfer-name';
-    name.textContent = `${t.kind} ${t.localPath || ''} ${t.kind==='upload'?'→':'←'} ${t.remotePath || ''}`;
+    const kindLabel = i18n.t(`transfers.kind.${t.kind}`, t.kind);
+    name.textContent = `${kindLabel} ${t.localPath || ''} ${t.kind === 'upload' ? '→' : '←'} ${t.remotePath || ''}`.trim();
     name.title = name.textContent;
 
     const status = document.createElement('div'); status.className='transfer-status';
-    status.textContent = t.state;
+    status.textContent = i18n.t(`transfers.state.${t.state}`, t.state);
     if (t.state === 'completed') status.style.color = 'var(--color-success)';
     else if (t.state === 'failed') status.style.color = 'var(--color-error)';
     else if (t.state === 'running') status.style.color = 'var(--color-accent)';
@@ -3676,7 +4167,7 @@ async function refreshTransfers() {
     if (t.state === 'running') {
       const pauseBtn = document.createElement('button');
       pauseBtn.className = 'btn-secondary';
-      pauseBtn.textContent = 'Pause';
+      pauseBtn.textContent = i18n.t('transfers.button.pause', 'Pause');
       pauseBtn.style.fontSize = 'var(--font-size-xs)';
       pauseBtn.style.height = '20px';
       pauseBtn.style.padding = '0 var(--space-sm)';
@@ -3688,7 +4179,7 @@ async function refreshTransfers() {
 
       const cancelBtn = document.createElement('button');
       cancelBtn.className = 'btn-secondary';
-      cancelBtn.textContent = 'Cancel';
+      cancelBtn.textContent = i18n.t('transfers.button.cancel', 'Cancel');
       cancelBtn.style.fontSize = 'var(--font-size-xs)';
       cancelBtn.style.height = '20px';
       cancelBtn.style.padding = '0 var(--space-sm)';
@@ -3702,7 +4193,7 @@ async function refreshTransfers() {
     if (t.state === 'queued') {
       const cancelBtn = document.createElement('button');
       cancelBtn.className = 'btn-secondary';
-      cancelBtn.textContent = 'Cancel';
+      cancelBtn.textContent = i18n.t('transfers.button.cancel', 'Cancel');
       cancelBtn.style.fontSize = 'var(--font-size-xs)';
       cancelBtn.style.height = '20px';
       cancelBtn.style.padding = '0 var(--space-sm)';
@@ -3716,7 +4207,7 @@ async function refreshTransfers() {
     if (t.state === 'paused') {
       const resumeBtn = document.createElement('button');
       resumeBtn.className = 'btn-primary';
-      resumeBtn.textContent = 'Resume';
+      resumeBtn.textContent = i18n.t('transfers.button.resume', 'Resume');
       resumeBtn.style.fontSize = 'var(--font-size-xs)';
       resumeBtn.style.height = '20px';
       resumeBtn.style.padding = '0 var(--space-sm)';
@@ -3728,7 +4219,7 @@ async function refreshTransfers() {
 
       const cancelBtn = document.createElement('button');
       cancelBtn.className = 'btn-secondary';
-      cancelBtn.textContent = 'Cancel';
+      cancelBtn.textContent = i18n.t('transfers.button.cancel', 'Cancel');
       cancelBtn.style.fontSize = 'var(--font-size-xs)';
       cancelBtn.style.height = '20px';
       cancelBtn.style.padding = '0 var(--space-sm)';
@@ -3742,7 +4233,7 @@ async function refreshTransfers() {
     if (t.state === 'failed') {
       const retryBtn = document.createElement('button');
       retryBtn.className = 'btn-primary';
-      retryBtn.textContent = 'Retry';
+      retryBtn.textContent = i18n.t('transfers.button.retry', 'Retry');
       retryBtn.style.fontSize = 'var(--font-size-xs)';
       retryBtn.style.height = '20px';
       retryBtn.style.padding = '0 var(--space-sm)';
@@ -3768,15 +4259,54 @@ import { CommandPalette } from './command-palette.mjs';
 
 const commandPalette = new CommandPalette();
 
-// Register commands
-commandPalette.registerCommands([
-  { id: 'closeTab', icon: '✕', name: 'Close Tab', description: 'Close current tab', tags: ['terminal'], action: () => { if (state.activeId) closeTab(state.activeId); } },
-  { id: 'clearTerminal', icon: '🧹', name: 'Clear Terminal', description: 'Clear terminal screen', tags: ['terminal'], action: () => { const t = state.tabs.find(x => x.id === state.activeId); if (t && t.write) t.write('clear\r'); } }
-]);
+const commandPaletteCommands = [
+  {
+    id: 'closeTab',
+    icon: '✕',
+    name: 'Close Tab',
+    nameKey: 'commandPalette.closeTab.name',
+    description: 'Close current tab',
+    descriptionKey: 'commandPalette.closeTab.description',
+    tags: ['terminal'],
+    action: () => {
+      if (state.activeId) closeTab(state.activeId);
+    }
+  },
+  {
+    id: 'clearTerminal',
+    icon: '🧹',
+    name: 'Clear Terminal',
+    nameKey: 'commandPalette.clearTerminal.name',
+    description: 'Clear terminal screen',
+    descriptionKey: 'commandPalette.clearTerminal.description',
+    tags: ['terminal'],
+    action: () => {
+      const t = state.tabs.find(x => x.id === state.activeId);
+      if (t && t.write) t.write('clear\r');
+    }
+  },
+  {
+    id: 'openSshTmux',
+    icon: '🌐',
+    name: 'Open SSH Session',
+    nameKey: 'commandPalette.openSshTmux.name',
+    description: 'Start a tmux-backed SSH terminal',
+    descriptionKey: 'commandPalette.openSshTmux.description',
+    tags: ['terminal', 'ssh', 'tmux'],
+    action: () => promptOpenSshTmuxTab()
+  }
+];
+
+commandPalette.registerCommands(commandPaletteCommands);
 
 // Update translations when locale changes
 i18n.onChange(() => {
   applyLocaleTextAndRefresh();
+  commandPalette.updateLocale();
+  refreshTransfers();
+  if (pendingConflict) {
+    conflictText.textContent = getConflictDescription(pendingConflict.fileName);
+  }
 });
 
 // Add shortcuts to keyboard handler
@@ -3833,10 +4363,18 @@ const conflictOverwrite = document.getElementById('conflictOverwrite');
 
 let pendingConflict = null;
 
+function getConflictDescription(fileName) {
+  return i18n.t(
+    'conflict.description',
+    `A file named "${fileName}" already exists at the destination. What would you like to do?`,
+    { fileName }
+  );
+}
+
 // Show conflict resolution dialog
 function showConflictDialog(task, existingPath) {
   const fileName = existingPath.split(/[\\/]/).pop();
-  conflictText.textContent = `A file named "${fileName}" already exists at the destination. What would you like to do?`;
+  conflictText.textContent = getConflictDescription(fileName);
   conflictFileName.value = fileName;
   
   pendingConflict = { task, existingPath, fileName };
@@ -3863,7 +4401,7 @@ conflictRename.onclick = () => {
   if (pendingConflict) {
     const newName = conflictFileName.value.trim();
     if (!newName || newName === pendingConflict.fileName) {
-      alert('Please provide a different file name');
+      alert(i18n.t('conflict.error.differentName', 'Please provide a different file name'));
       return;
     }
     

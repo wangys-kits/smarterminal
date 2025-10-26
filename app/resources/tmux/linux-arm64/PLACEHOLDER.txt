@@ -1,0 +1,5 @@
+This directory should contain the prebuilt Linux arm64 `tmux` binary.
+
+Expected files:
+- `tmux` (executable)
+- `tmux.sha256` (optional checksum for integrity verification)

@@ -4,25 +4,226 @@ import { MarkdownRenderer } from './chat-terminal-markdown.mjs';
 import { CommandSuggestions } from './chat-terminal-suggestions.mjs';
 import { CellManager } from './chat-terminal-cells.mjs';
 import { PathCompleter } from './chat-terminal-path-completer.mjs';
+import i18n from './i18n.mjs';
 
 export const INTERACTIVE_SENTINEL = '__SMRT_INTERACTIVE_DONE__';
 const COMMAND_DONE_SENTINEL_PREFIX = '__SMRT_DONE__';
 const MAX_COMMAND_HISTORY = 500;
 
+const EXTENSION_LANGUAGE_MAP = {
+  js: 'javascript',
+  jsx: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  ts: 'typescript',
+  tsx: 'typescript',
+  json: 'json',
+  json5: 'json',
+  py: 'python',
+  pyw: 'python',
+  go: 'go',
+  rs: 'rust',
+  java: 'java',
+  kt: 'kotlin',
+  kts: 'kotlin',
+  swift: 'swift',
+  cs: 'csharp',
+  c: 'c',
+  h: 'c',
+  cpp: 'cpp',
+  cxx: 'cpp',
+  cc: 'cpp',
+  hpp: 'cpp',
+  hh: 'cpp',
+  php: 'php',
+  rb: 'ruby',
+  sh: 'bash',
+  bash: 'bash',
+  zsh: 'bash',
+  fish: 'bash',
+  html: 'html',
+  htm: 'html',
+  css: 'css',
+  scss: 'css',
+  less: 'css',
+  yaml: 'yaml',
+  yml: 'yaml',
+  toml: 'toml',
+  ini: 'ini',
+  sql: 'sql',
+  md: 'markdown'
+};
+
+const JAVASCRIPT_PATTERNS = [
+  { regex: /\/\/[^\n]*/g, token: 'comment' },
+  { regex: /\/\*[\s\S]*?\*\//g, token: 'comment' },
+  { regex: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/g, token: 'string' },
+  { regex: /\b(?:const|let|var|function|return|if|else|switch|case|break|continue|class|extends|new|try|catch|finally|throw|import|from|export|default|async|await|yield|of|in)\b/g, token: 'keyword' },
+  { regex: /\b(?:true|false|null|undefined|NaN|Infinity)\b/g, token: 'literal' },
+  { regex: /\b0x[0-9a-fA-F]+\b|\b\d+(?:\.\d+)?\b/g, token: 'number' }
+];
+
+const PYTHON_PATTERNS = [
+  { regex: /#[^\n]*/g, token: 'comment' },
+  { regex: /"""[\s\S]*?"""|'''[\s\S]*?'''/g, token: 'string' },
+  { regex: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, token: 'string' },
+  { regex: /\b(?:def|class|return|if|elif|else|for|while|try|except|finally|raise|with|as|from|import|pass|break|continue|lambda|yield|async|await|True|False|None)\b/g, token: 'keyword' },
+  { regex: /\b\d+(?:\.\d+)?\b/g, token: 'number' }
+];
+
+const C_LIKE_PATTERNS = [
+  { regex: /\/\/[^\n]*/g, token: 'comment' },
+  { regex: /\/\*[\s\S]*?\*\//g, token: 'comment' },
+  { regex: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, token: 'string' },
+  { regex: /\b(?:class|struct|enum|return|if|else|for|while|switch|case|break|continue|typedef|const|static|public|private|protected|import|package|try|catch|finally|throw|throws|new|using|namespace|template|func|defer|go|select|interface|impl)\b/g, token: 'keyword' },
+  { regex: /\b(?:true|false|null|nullptr)\b/g, token: 'literal' },
+  { regex: /\b0x[0-9a-fA-F]+\b|\b\d+(?:\.\d+)?\b/g, token: 'number' }
+];
+
+const SHELL_PATTERNS = [
+  { regex: /#[^\n]*/g, token: 'comment' },
+  { regex: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, token: 'string' },
+  { regex: /\b(?:if|then|fi|elif|else|for|while|do|done|case|esac|function|select|in)\b/g, token: 'keyword' },
+  { regex: /\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^}]+\}/g, token: 'property' }
+];
+
+const JSON_PATTERNS = [
+  { regex: /"(?:\\.|[^"\\])*"(?=\s*:)/g, token: 'property' },
+  { regex: /"(?:\\.|[^"\\])*"/g, token: 'string' },
+  { regex: /\b(?:true|false|null)\b/g, token: 'literal' },
+  { regex: /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g, token: 'number' }
+];
+
+const YAML_PATTERNS = [
+  { regex: /#[^\n]*/g, token: 'comment' },
+  { regex: /(^(?:\s*[-\w\.]+))(?=\s*:)/gm, token: 'yaml-key' },
+  { regex: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, token: 'string' },
+  { regex: /\b(?:true|false|null|~)\b/gi, token: 'literal' },
+  { regex: /-?\d+(?:\.\d+)?/g, token: 'number' }
+];
+
+const HTML_PATTERNS = [
+  { regex: /<\/?[A-Za-z][^>]*?>/g, token: 'tag' },
+  { regex: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, token: 'string' }
+];
+
+const CSS_PATTERNS = [
+  { regex: /\/\*[\s\S]*?\*\//g, token: 'comment' },
+  { regex: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, token: 'string' },
+  { regex: /\b[\d\.]+(?:px|rem|em|vh|vw|%)\b/g, token: 'number' },
+  { regex: /#[0-9a-fA-F]{3,8}\b/g, token: 'number' },
+  { regex: /\b[a-z-]+(?=\s*:)/g, token: 'property' },
+  { regex: /\b(?:var|calc|clamp|rgb|rgba|hsl|hsla)\b/g, token: 'function' }
+];
+
+const SQL_PATTERNS = [
+  { regex: /--[^\n]*/g, token: 'comment' },
+  { regex: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, token: 'string' },
+  { regex: /\b(?:SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|DELETE|JOIN|LEFT|RIGHT|INNER|OUTER|GROUP|BY|ORDER|LIMIT|AND|OR|NOT|NULL|AS|ON|DISTINCT|CREATE|TABLE|PRIMARY|KEY|FOREIGN|DROP|ALTER)\b/gi, token: 'sql-keyword' },
+  { regex: /-?\d+(?:\.\d+)?/g, token: 'number' }
+];
+
+const RUBY_PATTERNS = [
+  { regex: /#[^\n]*/g, token: 'comment' },
+  { regex: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, token: 'string' },
+  { regex: /\b(?:def|class|module|return|if|elsif|else|end|begin|rescue|ensure|case|when|while|until|for|yield|self|super|true|false|nil)\b/g, token: 'keyword' },
+  { regex: /\b\d+(?:\.\d+)?\b/g, token: 'number' }
+];
+
+const TOML_PATTERNS = [
+  { regex: /#[^\n]*/g, token: 'comment' },
+  { regex: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, token: 'string' },
+  { regex: /\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})?)?\b/g, token: 'literal' },
+  { regex: /\b\d+(?:\.\d+)?\b/g, token: 'number' },
+  { regex: /(^\s*[A-Za-z0-9_\-\.]+)(?=\s*=)/gm, token: 'property' }
+];
+
+const INI_PATTERNS = [
+  { regex: /;[^\n]*/g, token: 'comment' },
+  { regex: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, token: 'string' },
+  { regex: /(^\s*[A-Za-z0-9_\-\.]+)(?=\s*=)/gm, token: 'property' }
+];
+
+const MARKDOWN_PATTERNS = [
+  { regex: /^\s{0,3}#{1,6}.*/gm, token: 'keyword' },
+  { regex: /`[^`]+`/g, token: 'string' },
+  { regex: /\*\*[^*]+\*\*|__[^_]+__/g, token: 'literal' }
+];
+
+const SYNTAX_SPECS = {
+  javascript: { aliases: ['typescript', 'jsx', 'tsx'], patterns: JAVASCRIPT_PATTERNS },
+  python: { patterns: PYTHON_PATTERNS },
+  go: { patterns: C_LIKE_PATTERNS },
+  rust: { patterns: C_LIKE_PATTERNS },
+  java: { patterns: C_LIKE_PATTERNS },
+  php: { patterns: C_LIKE_PATTERNS },
+  c: { patterns: C_LIKE_PATTERNS },
+  cpp: { aliases: ['c++'], patterns: C_LIKE_PATTERNS },
+  csharp: { aliases: ['cs'], patterns: C_LIKE_PATTERNS },
+  swift: { patterns: C_LIKE_PATTERNS },
+  kotlin: { patterns: C_LIKE_PATTERNS },
+  ruby: { patterns: RUBY_PATTERNS },
+  json: { patterns: JSON_PATTERNS },
+  yaml: { aliases: ['yml'], patterns: YAML_PATTERNS },
+  bash: { aliases: ['shell', 'sh', 'zsh', 'fish'], patterns: SHELL_PATTERNS },
+  html: { patterns: HTML_PATTERNS },
+  css: { patterns: CSS_PATTERNS },
+  sql: { patterns: SQL_PATTERNS },
+  toml: { patterns: TOML_PATTERNS },
+  ini: { patterns: INI_PATTERNS },
+  markdown: { aliases: ['md'], patterns: MARKDOWN_PATTERNS }
+};
+
+
 export class ChatTerminal {
-  constructor(container, inputEl, messagesEl, statusEl) {
+  static VIEW_MAX_TEXT_BYTES = 2 * 1024 * 1024;
+  static VIEW_MAX_IMAGE_BYTES = 6 * 1024 * 1024;
+  static bindExecuteButton(button) {
+    if (ChatTerminal.executeButton !== button) {
+      if (ChatTerminal.executeButton && ChatTerminal._executeClickHandler) {
+        ChatTerminal.executeButton.removeEventListener('click', ChatTerminal._executeClickHandler);
+      }
+      ChatTerminal.executeButton = button || null;
+      if (ChatTerminal.executeButton) {
+        ChatTerminal._executeClickHandler = (event) => {
+          event.preventDefault();
+          const inst = ChatTerminal.activeInstance;
+          if (!inst || !inst.isActive || inst.isRestarting || inst.isCommandRunning || !inst.terminalReady) return;
+          inst.executeCommand();
+        };
+        ChatTerminal.executeButton.addEventListener('click', ChatTerminal._executeClickHandler);
+      } else {
+        ChatTerminal._executeClickHandler = null;
+      }
+    }
+    ChatTerminal.updateExecuteButtonState();
+  }
+
+  static updateExecuteButtonState() {
+    const button = ChatTerminal.executeButton;
+    if (!button) return;
+    const inst = ChatTerminal.activeInstance;
+    const shouldDisable = !inst || !inst.isActive || inst.isRestarting || inst.isCommandRunning || !inst.terminalReady || inst.input?.disabled;
+    button.disabled = shouldDisable;
+  }
+
+  constructor(container, inputEl, messagesEl, statusEl, executeButton = null) {
     this.container = container;
     this.input = inputEl;
     this.messages = messagesEl;
     this.statusEl = statusEl;
+    this.executeButton = executeButton || document.getElementById('commandExecuteBtn') || null;
+    ChatTerminal.bindExecuteButton(this.executeButton);
     this.history = [];
     this.historyIndex = -1;
     this.historyDraft = '';
     this.currentCommand = null;
+    this.lastCommand = null;
     this.writer = null;
     this.messageHistory = [];
     this.isCommandRunning = false;
     this.commandBusyWarningShown = false;
+    this.isRestarting = false;
     this.inputMode = 'code';
     this.inputWrapper = this.input.closest('.command-input-wrapper');
     this.savedInputMode = 'code';
@@ -67,6 +268,14 @@ export class ChatTerminal {
     this.setupInputHandlers();
     this.setupAutoResize();
     this.setupSelectionHandlers();
+    if (!ChatTerminal._copyListenerRegistered) {
+      ChatTerminal._copyListenerRegistered = true;
+      ChatTerminal._copyListener = (event) => {
+        const inst = ChatTerminal.activeInstance;
+        if (inst) inst.handleOutputCopy(event);
+      };
+      document.addEventListener('copy', ChatTerminal._copyListener);
+    }
     window.addEventListener('resize', this.handleWindowResize);
     this.setInputMode('code', { silent: true });
     this.handleDocumentClick = (event) => {
@@ -134,6 +343,14 @@ export class ChatTerminal {
     this._outputIsSanitized = false; // whether output buffer stores pre-cleaned text
     // Initialize line-number gutter for empty input
     try { this.updateInputLineNumbers(); } catch (_) {}
+
+    // Virtualized output tracking (VSCode-style large buffer handling)
+    this.virtualOutputs = new WeakMap();
+    this._virtualAutoHeightThreshold = 1200; // px before enabling internal scroll
+    this._virtualBufferLines = 120; // overscan lines rendered around viewport
+    this.syntaxConfigCache = new Map();
+
+    ChatTerminal.updateExecuteButtonState();
   }
 
   // Best-effort platform detection to avoid hard IPC dependency
@@ -314,6 +531,7 @@ export class ChatTerminal {
       // Hide suggestions when input content changes
       this.hideSuggestions();
       this.handleCommandSuggestions(e.target.value);
+      ChatTerminal.updateExecuteButtonState();
     });
   }
 
@@ -345,6 +563,7 @@ export class ChatTerminal {
       this.input.rows = Math.max(1, lines);
       this.positionSuggestionsDropdown();
       this.updateInputLineNumbers();
+      ChatTerminal.updateExecuteButtonState();
     });
   }
 
@@ -366,7 +585,6 @@ export class ChatTerminal {
     }
 
     window.addEventListener('keydown', this.handleGlobalKeydown);
-
     // Paste handler: when pasting file(s) after copying from Finder/Explorer,
     // insert their absolute paths. Trigger if looks like /upload OR the clipboard
     // clearly contains files/URLs (prevents pasting file-icon images into editor).
@@ -631,16 +849,19 @@ export class ChatTerminal {
   }
 
   async executeCommand() {
-    if (this.isCommandRunning) {
-      const interactiveInput = this.input.value;
-      if (!interactiveInput) return;
-      this.sendInteractiveInput(interactiveInput);
-      return;
-    }
-
     const rawInput = this.input.value;
     const trimmedInput = rawInput.trim();
-    if (!trimmedInput) return;
+
+    if (this.isCommandRunning) {
+      if (this.activeCommandAcceptsInteractiveInput()) {
+        if (!rawInput) return;
+        this.sendInteractiveInput(rawInput);
+        return;
+      }
+      if (!trimmedInput) return;
+    } else if (!trimmedInput) {
+      return;
+    }
 
     if (this.inputMode === 'markdown') {
       const markdownContent = rawInput.replace(/\r\n/g, '\n');
@@ -663,6 +884,17 @@ export class ChatTerminal {
     if (transferCommand) {
       // Handle file transfer command
       await this.handleTransferCommand(transferCommand);
+      return;
+    }
+
+    const viewCommand = this.parseViewCommand(command);
+    if (viewCommand) {
+      await this.handleViewCommand(command, viewCommand);
+      this.input.value = '';
+      this.input.rows = 1;
+      this.updateInputLineNumbers();
+      this.hideSuggestions();
+      this.input.focus();
       return;
     }
 
@@ -691,6 +923,15 @@ export class ChatTerminal {
     }
 
     this.runShellCommand(command, cellContext);
+  }
+
+  activeCommandAcceptsInteractiveInput() {
+    const cmd = this.currentCommand;
+    if (!cmd) return false;
+    if (cmd.isInteractive) return true;
+    if (cmd.altScreenActive) return true;
+    if (cmd.syncOutputActive) return true;
+    return false;
   }
 
   navigateHistory(direction) {
@@ -944,6 +1185,9 @@ export class ChatTerminal {
     if (!cellContext.editing) {
       editor.classList.remove('editing');
     }
+    if (cellContext.execButton) {
+      cellContext.execButton.disabled = false;
+    }
 
     if (editor.__smrtDblHandler) {
       editor.removeEventListener('dblclick', editor.__smrtDblHandler);
@@ -1061,6 +1305,8 @@ export class ChatTerminal {
           }
 
           // As a last resort, ask main process clipboard
+          const selectionBounds = this.getSelectionBoundsInContentEditable(editor);
+
           if (!paths.length && (looksLikeUpload || hasFilesType || hasUriList || hasPublicFileUrl || hasFileItems)) {
             e.preventDefault();
             if (window?.sm?.clip?.getFilePaths) {
@@ -1070,12 +1316,7 @@ export class ChatTerminal {
                 const needsQuoting = (s) => /\s|["'`$&|;<>()\\]/.test(s);
                 const singleQuote = (s) => "'" + s.replace(/'/g, "'\\''") + "'";
                 const joined = list.map(p => needsQuoting(p) ? singleQuote(p) : p).join(' ');
-                const input = editor.textContent || '';
-                const pos = this.getCursorPositionInContentEditable(editor);
-                const before = input.slice(0, pos);
-                const after = input.slice(pos);
-                editor.textContent = before + joined + after;
-                this.setCursorPositionInContentEditable(editor, (before + joined).length);
+                this.replaceSelectionInContentEditable(editor, joined, selectionBounds);
               }).catch(() => {});
               return;
             }
@@ -1090,12 +1331,7 @@ export class ChatTerminal {
           const joined = paths.map(p => needsQuoting(p) ? singleQuote(p) : p).join(' ');
 
           // Insert into contentEditable at caret
-          const input = editor.textContent || '';
-          const pos = this.getCursorPositionInContentEditable(editor);
-          const before = input.slice(0, pos);
-          const after = input.slice(pos);
-          editor.textContent = before + joined + after;
-          this.setCursorPositionInContentEditable(editor, (before + joined).length);
+          this.replaceSelectionInContentEditable(editor, joined, selectionBounds);
         } catch (_) {
           // swallow and allow default
         }
@@ -1119,6 +1355,22 @@ export class ChatTerminal {
       editor.addEventListener('blur', blurHandler);
       editor.addEventListener('focus', focusHandler);
     }
+
+    if (cellContext.execButton && !cellContext.execButton.__smrtClickHandler) {
+      const runHandler = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (this.isCommandRunning && this.currentCommand?.cellContext === cellContext) return;
+        const newCommand = editor.textContent.trim();
+        if (!newCommand) return;
+        if (cellContext.commandPre) {
+          this.focusCommandEditor(cellContext, { preventScroll: true, collapseToEnd: true });
+        }
+        this.finishCommandEdit(cellContext, newCommand, true);
+      };
+      cellContext.execButton.__smrtClickHandler = runHandler;
+      cellContext.execButton.addEventListener('click', runHandler);
+    }
   }
 
   startCommandEdit(cellContext) {
@@ -1130,20 +1382,32 @@ export class ChatTerminal {
     this.selectCell(cellContext.cellEl);
     editor.classList.add('editing');
 
-    // Safely place caret at end of the contentEditable editor.
-    // In rare cases the editor may not yet be attached to the live document
-    // (e.g., during fast DOM updates), which causes selection.addRange to
-    // throw "The given range isn't in document.". Guard against that so
-    // executing a command never breaks the UI flow.
+    cellContext.editing = true;
+    this.focusCommandEditor(cellContext);
+  }
+
+  focusCommandEditor(cellContext, options = {}) {
+    const editor = cellContext?.commandPre;
+    if (!editor) return;
+    const { collapseToEnd = true, preventScroll = true } = options || {};
+
     const placeCaret = () => {
-      try {
-        if (!document.contains(editor)) {
-          // If not in document yet, try again on next frame.
-          if (typeof requestAnimationFrame === 'function') {
-            requestAnimationFrame(placeCaret);
-          }
-          return;
+      if (!document.contains(editor)) {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(placeCaret);
         }
+        return;
+      }
+
+      try {
+        editor.focus({ preventScroll });
+      } catch (_) {
+        try { editor.focus(); } catch (_) {}
+      }
+
+      if (!collapseToEnd) return;
+
+      try {
         const sel = window.getSelection?.();
         if (sel) {
           sel.removeAllRanges();
@@ -1153,13 +1417,10 @@ export class ChatTerminal {
           sel.addRange(range);
         }
       } catch (err) {
-        // Swallow selection errors; caret placement is best-effort.
-        this.dbg?.('startCommandEdit selection error', err);
+        this.dbg?.('focusCommandEditor selection error', err);
       }
-      try { editor.focus(); } catch (_) {}
     };
 
-    cellContext.editing = true;
     placeCaret();
   }
 
@@ -1171,10 +1432,16 @@ export class ChatTerminal {
     cellContext.editing = false;
 
     cellContext.command = newCommand;
+    cellContext.syntaxMode = this.detectSyntaxMode(newCommand);
     editor.textContent = newCommand;
 
     if (shouldRun && newCommand) {
-      this.disableCommandEditing(cellContext);
+      cellContext.resumeEditingAfterRun = true;
+      this.clearComposerSelection();
+      if (cellContext?.cellEl) {
+        this.selectCell(cellContext.cellEl, { preventScroll: true });
+      }
+      this.disableCommandEditing(cellContext, { preserveFocus: true });
 
       // Intercept transfer commands when re-running an edited cell
       const transferCmd = this.parseTransferCommand(newCommand);
@@ -1190,6 +1457,12 @@ export class ChatTerminal {
         return;
       }
 
+      const viewCmd = this.parseViewCommand(newCommand);
+      if (viewCmd && viewCmd.path) {
+        this.handleViewCommand(newCommand, viewCmd, cellContext);
+        return;
+      }
+
       this.recordCommandHistory(newCommand);
       this.updateCommandStats(newCommand);
       this.runShellCommand(newCommand, cellContext, { fromRerun: true });
@@ -1200,7 +1473,7 @@ export class ChatTerminal {
     this.markDirty();
   }
 
-  disableCommandEditing(cellContext) {
+  disableCommandEditing(cellContext, options = {}) {
     const editor = cellContext?.commandPre;
     if (!editor) return;
 
@@ -1208,7 +1481,8 @@ export class ChatTerminal {
     editor.classList.remove('editing');
     cellContext.editing = false;
 
-    if (typeof document !== 'undefined' && document.activeElement === editor) {
+    const preserveFocus = Boolean(options?.preserveFocus);
+    if (!preserveFocus && typeof document !== 'undefined' && document.activeElement === editor) {
       editor.blur();
     }
   }
@@ -1433,14 +1707,16 @@ export class ChatTerminal {
     const copyButton = cellContext.copyButton;
     const followButton = cellContext.followButton;
     const controlRow = cellContext.controlRow;
+    const execButton = cellContext.execButton;
 
     const isRunning = this.isCommandRunning && this.currentCommand?.cellContext === cellContext;
     const hasOutput = !!cellContext.outputContent?.querySelector('.cell-output-text');
     const isCollapsed = !!cellContext.collapsed;
+    const isViewMode = !!cellContext.cellEl?.classList?.contains('mode-view');
 
     if (stopButton) {
-      stopButton.disabled = !isRunning;
-      stopButton.classList.toggle('active', isRunning);
+      stopButton.disabled = !isRunning || isViewMode;
+      stopButton.classList.toggle('active', isRunning && !isViewMode);
     }
     if (copyButton) {
       copyButton.disabled = !hasOutput;
@@ -1454,6 +1730,14 @@ export class ChatTerminal {
     }
     if (controlRow) {
       controlRow.classList.toggle('is-running', isRunning);
+      if (isViewMode) {
+        controlRow.style.display = 'none';
+      } else {
+        controlRow.style.removeProperty('display');
+      }
+    }
+    if (execButton) {
+      execButton.disabled = isRunning;
     }
   }
 
@@ -1501,6 +1785,51 @@ export class ChatTerminal {
       this.selectedCell.classList.remove('selected');
       this.selectedCell = null;
     }
+  }
+
+  findOutputAncestor(node) {
+    if (!node) return null;
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      return node.closest('.cell-output-text');
+    }
+    if (node.parentElement) {
+      return node.parentElement.closest('.cell-output-text');
+    }
+    return null;
+  }
+
+  handleOutputCopy(event) {
+    if (!this.isActive) return;
+    if (!event || !event.clipboardData) return;
+    const selection = typeof window !== 'undefined' ? window.getSelection?.() : null;
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return;
+
+    const parts = [];
+    for (let i = 0; i < selection.rangeCount; i += 1) {
+      const range = selection.getRangeAt(i);
+      const ancestor = this.findOutputAncestor(range.commonAncestorContainer) ||
+        this.findOutputAncestor(range.startContainer) ||
+        this.findOutputAncestor(range.endContainer);
+      if (!ancestor || !this.messages || !this.messages.contains(ancestor)) continue;
+
+      const fragment = range.cloneContents();
+      if (!fragment) continue;
+      if (typeof fragment.querySelectorAll === 'function') {
+        fragment.querySelectorAll('.cell-output-line-number').forEach((el) => el.remove());
+      }
+      const text = fragment.textContent;
+      if (text && text.trim().length > 0) {
+        parts.push(text);
+      }
+    }
+
+    if (!parts.length) return;
+
+    event.preventDefault();
+    const payload = parts.join('\n');
+    try {
+      event.clipboardData.setData('text/plain', payload);
+    } catch (_) {}
   }
 
   setComposerSelected(isSelected) {
@@ -1702,7 +2031,7 @@ export class ChatTerminal {
     outputBody.appendChild(loadingEl);
 
     // Don't auto-scroll for rerun commands
-    const fromRerun = this.currentCommand?.fromRerun || false;
+    const fromRerun = Boolean(cellContext?.fromRerun);
     if (!fromRerun) {
       if (this.isNearBottom()) this.scrollToBottom();
     }
@@ -1798,13 +2127,25 @@ export class ChatTerminal {
     return `${two(hours)}:${two(minutes)}:${two(seconds)}`;
   }
 
+  formatFileSize(bytes) {
+    const value = Number(bytes);
+    if (!Number.isFinite(value) || value < 0) return '';
+    if (this.pathCompleter && typeof this.pathCompleter.formatSize === 'function') {
+      return this.pathCompleter.formatSize(value);
+    }
+    if (value < 1024) return `${value}B`;
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)}KB`;
+    if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)}MB`;
+    return `${(value / (1024 * 1024 * 1024)).toFixed(1)}GB`;
+  }
+
   runShellCommand(command, cellContext, { fromRerun = false } = {}) {
     // Safety: if someone calls runShellCommand with a transfer command, route it
     const t = this.parseTransferCommand(command);
     if (t) {
       // When called from rerun with an existing cell, run in place; otherwise create a new cell
       if (cellContext) {
-        cellContext.cellEl.classList.remove('mode-command', 'mode-upload', 'mode-download');
+        cellContext.cellEl.classList.remove('mode-command', 'mode-upload', 'mode-download', 'mode-view');
         cellContext.cellEl.classList.add(`mode-${t.type}`);
         if (t.type === 'upload') {
           this.executeUploadCommand(t.sourcePath, t.targetPath, cellContext);
@@ -1828,6 +2169,7 @@ export class ChatTerminal {
     this.selectCell(cellContext.cellEl, { preventScroll: fromRerun });
 
     cellContext.command = command;
+    cellContext.syntaxMode = this.detectSyntaxMode(command);
     if (cellContext.commandPre) {
       cellContext.commandPre.textContent = command;
     }
@@ -1856,6 +2198,7 @@ export class ChatTerminal {
 
   processCommandQueue() {
     if (this.isCommandRunning) return;
+    this.lastCommand = null;
     const next = this.commandQueue.shift();
     if (!next) return;
     this.startQueuedCommand(next);
@@ -1872,6 +2215,8 @@ export class ChatTerminal {
     const executionIndex = this.cellCounter++;
     this.applyExecutionIndex(cellContext, executionIndex);
 
+    this.lastCommand = { command, cellContext, fromRerun };
+
     const loadingEl = this.addLoadingMessage(cellContext);
     this.updateControlButtonStates(cellContext);
 
@@ -1884,6 +2229,7 @@ export class ChatTerminal {
       // 获取当前 Tab 的状态
       const tabState = typeof this.getTabState === 'function' ? this.getTabState() : null;
       const ptyId = tabState?.ptyId;
+      const backendMode = (tabState && (tabState.backendMode || tabState.mode)) || 'pty';
 
       if (!ptyId) {
         throw new Error('No PTY available for this tab');
@@ -1928,7 +2274,9 @@ export class ChatTerminal {
         altScreenActive: false,
         syncOutputActive: false,
         tuiSuppressedBytes: 0,
-        tuiSuppressedShown: false
+        tuiSuppressedShown: false,
+        backendMode,
+        disableAltScreenSuppression: typeof backendMode === 'string' && backendMode.startsWith('tmux')
       };
 
       if (cellContext?.outputPrompt) {
@@ -1951,6 +2299,7 @@ export class ChatTerminal {
       this.removeLoadingMessage(loadingEl);
       this.renderCellOutput(cellContext, `Failed to execute: ${error.message}`, { isError: true });
       this.currentCommand = null;
+      this.lastCommand = null;
       this.setCommandRunning(false, cellContext);
       this.processCommandQueue();
     }
@@ -2038,6 +2387,13 @@ export class ChatTerminal {
     if (cellContext.outputRow) {
       cellContext.outputRow.dataset.collapsed = collapsed ? '1' : '0';
     }
+
+    const outputEl = cellContext.outputContent?.querySelector('.cell-output-text');
+    if (outputEl && outputEl.dataset.virtualized === '1') {
+      const state = this.virtualOutputs.get(outputEl);
+      this.updateVirtualAutoSize(outputEl, state);
+      this.updateVirtualViewport(outputEl, { force: true });
+    }
   }
 
   rehydrateCells() {
@@ -2063,6 +2419,8 @@ export class ChatTerminal {
         this.attachControlHandlers(cellContext);
         this.updateCollapseState(cellContext);
         this.updateControlButtonStates(cellContext);
+        cellContext.syntaxMode = this.detectSyntaxMode(cellContext.command || '');
+        this.ensureVirtualOutput(cellContext);
       }
     });
   }
@@ -2116,9 +2474,10 @@ export class ChatTerminal {
       cellContext.outputBody.innerHTML = '';
     }
 
-    const pre = document.createElement('pre');
-    pre.className = 'cell-output-text';
-    this.updateOutputPreText(pre, safeText || (isError ? 'Error' : '(command executed, no output)'));
+    const pre = this.createVirtualOutputElement();
+    const syntaxMode = cellContext.syntaxMode || '';
+    pre.dataset.syntaxMode = syntaxMode;
+    this.updateOutputPreText(pre, safeText || (isError ? 'Error' : '(command executed, no output)'), { language: syntaxMode });
 
     if (cellContext.outputBody) {
       cellContext.outputBody.appendChild(pre);
@@ -2127,7 +2486,7 @@ export class ChatTerminal {
     }
 
     // Don't auto-scroll for rerun commands
-    const fromRerun = this.currentCommand?.fromRerun || false;
+    const fromRerun = Boolean(cellContext?.fromRerun);
     if (!fromRerun) {
       this.scrollToBottom();
     }
@@ -2138,16 +2497,512 @@ export class ChatTerminal {
     return pre;
   }
 
-  updateOutputPreText(preEl, text) {
+  updateOutputPreText(preEl, text, options = {}) {
     if (!preEl) return;
     const normalized = typeof text === 'string' ? text : String(text ?? '');
     // Always write content; even if cleaned text is identical, the raw stream may still be progressing
     // and users expect visible activity. textContent updates are cheap enough.
     preEl.dataset.rawOutput = normalized;
+    if (options.language) {
+      preEl.dataset.syntaxMode = options.language;
+    }
+    const syntaxMode = options.language || preEl.dataset.syntaxMode || '';
 
-    // Always use simple textContent rendering for performance
-    preEl.innerHTML = '';
-    preEl.textContent = normalized;
+    if (preEl.dataset.virtualized === '1') {
+      this.updateVirtualOutputText(preEl, normalized, { language: syntaxMode });
+      return;
+    }
+
+    const lines = normalized ? normalized.split('\n') : [''];
+    preEl.innerHTML = this.renderOutputLines(lines, 0, syntaxMode);
+  }
+
+  createVirtualOutputElement() {
+    const container = document.createElement('div');
+    container.className = 'cell-output-text cell-output-virtual';
+    container.dataset.virtualized = '1';
+
+    const spacer = document.createElement('div');
+    spacer.className = 'cell-output-virtual-spacer';
+    container.appendChild(spacer);
+
+    const viewport = document.createElement('div');
+    viewport.className = 'cell-output-virtual-viewport';
+    container.appendChild(viewport);
+
+    const state = {
+      spacerEl: spacer,
+      viewportEl: viewport,
+      lines: [''],
+      text: '',
+      lineHeight: 0,
+      renderStart: 0,
+      renderEnd: 0,
+      lastScrollTop: -1,
+      lastClientHeight: -1,
+      pendingFrame: null,
+      resizeObserver: null,
+      highlightLang: null
+    };
+
+    this.virtualOutputs.set(container, state);
+
+    const onScroll = () => {
+      this.updateVirtualViewport(container);
+    };
+    state.scrollHandler = onScroll;
+    container.__smrtVirtualScrollHandler = onScroll;
+    container.addEventListener('scroll', onScroll);
+
+    if (typeof ResizeObserver !== 'undefined') {
+      try {
+        state.resizeObserver = new ResizeObserver(() => {
+          this.refreshVirtualMetrics(container);
+          this.updateVirtualViewport(container, { force: true });
+        });
+        state.resizeObserver.observe(container);
+        container.__smrtVirtualResizeObserver = state.resizeObserver;
+      } catch (_) {
+        state.resizeObserver = null;
+      }
+    }
+
+    // Ensure initial metrics are available once element is in DOM
+    requestAnimationFrame(() => {
+      this.refreshVirtualMetrics(container);
+      this.updateVirtualViewport(container, { force: true });
+    });
+
+    return container;
+  }
+
+  refreshVirtualMetrics(el) {
+    const state = this.virtualOutputs.get(el);
+    if (!state) return;
+    let lineHeight = 0;
+    try {
+      const style = window.getComputedStyle(el);
+      lineHeight = parseFloat(style.lineHeight || '');
+      if (!Number.isFinite(lineHeight) || lineHeight <= 0) {
+        const fontSize = parseFloat(style.fontSize || '');
+        if (Number.isFinite(fontSize) && fontSize > 0) {
+          lineHeight = fontSize * 1.5;
+        }
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    if (!Number.isFinite(lineHeight) || lineHeight <= 0) {
+      lineHeight = 20;
+    }
+    state.lineHeight = lineHeight;
+  }
+
+  updateVirtualOutputText(el, text, { language = null } = {}) {
+    const state = this.virtualOutputs.get(el);
+    if (!state) return;
+
+    state.text = text || '';
+    state.lines = state.text ? state.text.split('\n') : [''];
+    el.dataset.syntaxMode = language || '';
+
+    this.updateVirtualSpacer(el, state);
+    this.updateVirtualViewport(el, { force: true });
+  }
+
+  updateVirtualSpacer(el, state) {
+    if (!state) return;
+    if (!state.lineHeight || state.lineHeight <= 0) {
+      this.refreshVirtualMetrics(el);
+    }
+    const lineHeight = state.lineHeight || 20;
+    const totalLines = Math.max(1, state.lines.length);
+    const viewportPadding = this.getVirtualContainerPadding(el);
+    state.paddingTop = viewportPadding.top;
+    state.paddingBottom = viewportPadding.bottom;
+    const totalHeight = totalLines * lineHeight;
+    state.spacerEl.style.height = `${totalHeight}px`;
+    this.updateVirtualAutoSize(el, state);
+  }
+
+  updateVirtualViewport(el, { force = false } = {}) {
+    const state = this.virtualOutputs.get(el);
+    if (!state) return;
+
+    if (!state.lineHeight || state.lineHeight <= 0) {
+      this.refreshVirtualMetrics(el);
+    }
+    const lineHeight = state.lineHeight || 20;
+    const scrollTop = el.scrollTop;
+    const clientHeight = el.clientHeight || 0;
+    const paddingTop = state.paddingTop || 0;
+    const paddingBottom = state.paddingBottom || 0;
+
+    const overscan = Math.max(0, this._virtualBufferLines || 0) * lineHeight;
+    const totalLines = Math.max(1, state.lines.length);
+    const visibleHeight = Math.max(0, clientHeight - paddingTop - paddingBottom);
+    const contentScrollTop = Math.max(0, scrollTop - paddingTop);
+    const totalHeight = totalLines * lineHeight;
+
+    const startPx = Math.max(0, contentScrollTop - overscan);
+    const endPx = Math.min(totalHeight, contentScrollTop + visibleHeight + overscan);
+    const startLine = Math.max(0, Math.floor(startPx / lineHeight));
+    const endLine = Math.min(totalLines, Math.ceil(endPx / lineHeight));
+
+    if (!force &&
+        state.renderStart === startLine &&
+        state.renderEnd === endLine &&
+        state.lastScrollTop === scrollTop &&
+        state.lastClientHeight === clientHeight) {
+      return;
+    }
+
+    state.renderStart = startLine;
+    state.renderEnd = endLine;
+    state.lastScrollTop = scrollTop;
+    state.lastClientHeight = clientHeight;
+
+    const lines = state.lines.slice(startLine, endLine);
+    const translateY = paddingTop + (startLine * lineHeight);
+    state.viewportEl.style.transform = `translateY(${translateY}px)`;
+    const language = el.dataset.syntaxMode || '';
+    state.viewportEl.innerHTML = this.renderOutputLines(lines, startLine, language);
+    this.updateVirtualSpacer(el, state);
+  }
+
+  updateVirtualAutoSize(el, state) {
+    if (!state) return;
+    const lineHeight = state.lineHeight || 20;
+    const totalLines = Math.max(1, state.lines.length);
+    const totalHeight = totalLines * lineHeight;
+
+    // Auto-expand small outputs to avoid unnecessary scrollbars
+    const threshold = Math.max(200, this._virtualAutoHeightThreshold || 0);
+    const isCollapsed = el.closest('.cell-row.cell-output.collapsed');
+
+    if (isCollapsed) {
+      el.style.height = '';
+      el.style.maxHeight = '';
+      el.dataset.virtualOverflow = '1';
+      return;
+    }
+
+    if (totalHeight <= threshold) {
+      el.style.height = `${totalHeight}px`;
+      el.style.maxHeight = `${totalHeight}px`;
+      el.dataset.virtualOverflow = '0';
+    } else {
+      el.style.height = '';
+      el.style.maxHeight = 'var(--cell-output-max-height, 65vh)';
+      el.dataset.virtualOverflow = '1';
+    }
+  }
+
+  getVirtualContainerPadding(el) {
+    if (!el || typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') {
+      return { top: 0, bottom: 0 };
+    }
+    try {
+      const style = window.getComputedStyle(el);
+      const parsePadding = (prop) => {
+        const raw = style.getPropertyValue(prop);
+        const value = parseFloat(raw);
+        return Number.isFinite(value) ? value : 0;
+      };
+      return {
+        top: parsePadding('padding-top'),
+        bottom: parsePadding('padding-bottom')
+      };
+    } catch (_) {
+      return { top: 0, bottom: 0 };
+    }
+  }
+
+  renderOutputLines(lines, offset, language) {
+    const spec = this.resolveSyntaxSpec(language);
+    const parts = [];
+    for (let i = 0; i < lines.length; i += 1) {
+      const raw = typeof lines[i] === 'string' ? lines[i] : '';
+      const lineNumber = offset + i + 1;
+      let content;
+      if (spec) {
+        content = this.highlightLineWithSpec(raw, spec);
+      } else {
+        content = raw ? this.escapeHtml(raw) : '';
+      }
+      if (!content) content = '&nbsp;';
+      parts.push(`<div class="cell-output-line"><span class="cell-output-line-number">${lineNumber}</span><span class="cell-output-line-text">${content}</span></div>`);
+    }
+    if (!parts.length) {
+      parts.push(`<div class="cell-output-line"><span class="cell-output-line-number">${offset + 1}</span><span class="cell-output-line-text">&nbsp;</span></div>`);
+    }
+    return parts.join('');
+  }
+
+  getFileNameFromPath(input) {
+    if (!input || typeof input !== 'string') return '';
+    const normalized = input.replace(/\\+/g, '/');
+    const segments = normalized.split('/').filter(Boolean);
+    if (!segments.length) return normalized.trim();
+    return segments[segments.length - 1];
+  }
+
+  resolveSyntaxSpec(language) {
+    if (!language) return null;
+    const key = String(language).toLowerCase();
+    if (this.syntaxConfigCache.has(key)) {
+      return this.syntaxConfigCache.get(key);
+    }
+    let spec = SYNTAX_SPECS[key] || null;
+    if (!spec) {
+      spec = Object.keys(SYNTAX_SPECS).find((name) => {
+        const cfg = SYNTAX_SPECS[name];
+        return Array.isArray(cfg.aliases) && cfg.aliases.includes(key);
+      });
+      spec = spec ? SYNTAX_SPECS[spec] : null;
+    }
+    this.syntaxConfigCache.set(key, spec || null);
+    return spec || null;
+  }
+
+  highlightLineWithSpec(line, spec) {
+    const source = typeof line === 'string' ? line : '';
+    if (!source) {
+      return '';
+    }
+
+    const matches = [];
+    if (Array.isArray(spec.patterns)) {
+      spec.patterns.forEach((pattern, order) => {
+        if (!pattern || !pattern.regex) return;
+        const base = pattern.regex;
+        const flags = base.flags.includes('g') ? base.flags : `${base.flags}g`;
+        const regex = new RegExp(base.source, flags);
+        let match;
+        while ((match = regex.exec(source)) !== null) {
+          const text = match[0];
+          if (!text) {
+            if (regex.lastIndex === match.index) regex.lastIndex += 1;
+            continue;
+          }
+          let start = match.index;
+          let end = start + text.length;
+          if (pattern.onMatch) {
+            const transformed = pattern.onMatch({ match, start, end, text });
+            if (!transformed) {
+              if (regex.lastIndex === match.index) regex.lastIndex += 1;
+              continue;
+            }
+            start = transformed.start;
+            end = transformed.end;
+          }
+          matches.push({ start, end, token: pattern.token, order });
+          if (regex.lastIndex === match.index) regex.lastIndex += 1;
+        }
+      });
+    }
+
+    if (!matches.length) {
+      return this.escapeHtml(source);
+    }
+
+    matches.sort((a, b) => (a.start - b.start) || (a.order - b.order));
+    const merged = [];
+    matches.forEach((m) => {
+      if (merged.some(existing => !(m.end <= existing.start || m.start >= existing.end))) {
+        return;
+      }
+      merged.push(m);
+    });
+
+    let cursor = 0;
+    let output = '';
+    merged.forEach((m) => {
+      if (m.start > cursor) {
+        output += this.escapeHtml(source.slice(cursor, m.start));
+      }
+      const segment = source.slice(m.start, m.end);
+      const tokenClass = m.token ? ` ${m.token}` : '';
+      output += `<span class="token${tokenClass}">${this.escapeHtml(segment)}</span>`;
+      cursor = m.end;
+    });
+    if (cursor < source.length) {
+      output += this.escapeHtml(source.slice(cursor));
+    }
+    return output || '';
+  }
+
+  detectSyntaxMode(command) {
+    const tokens = this.tokenizeCommand(command);
+    if (!tokens.length) return null;
+    const base = tokens[0].toLowerCase();
+    const catLike = new Set(['cat', 'bat', 'type', 'less', 'more', 'tail', 'head']);
+    if (catLike.has(base)) {
+      const path = this.extractFirstPath(tokens.slice(1));
+      if (path) {
+        return this.languageFromExtension(path);
+      }
+    }
+    return null;
+  }
+
+  tokenizeCommand(command) {
+    if (!command) return [];
+    const tokens = [];
+    let current = '';
+    let quote = null;
+    let escape = false;
+    const input = String(command);
+    for (let i = 0; i < input.length; i += 1) {
+      const ch = input[i];
+      if (escape) {
+        current += ch;
+        escape = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escape = true;
+        continue;
+      }
+      if (quote) {
+        if (ch === quote) {
+          quote = null;
+          continue;
+        }
+        current += ch;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+        continue;
+      }
+      if (/\s/.test(ch)) {
+        if (current) {
+          tokens.push(current);
+          current = '';
+        }
+        continue;
+      }
+      current += ch;
+    }
+    if (current) tokens.push(current);
+    return tokens;
+  }
+
+  extractFirstPath(args) {
+    if (!Array.isArray(args)) return null;
+    for (const arg of args) {
+      if (!arg) continue;
+      if (arg.startsWith('-')) continue;
+      return arg;
+    }
+    return null;
+  }
+
+  languageFromExtension(path) {
+    if (!path) return null;
+    const normalized = path.replace(/\\\\/g, '/');
+    const segments = normalized.split('/');
+    const file = segments.pop() || '';
+    const idx = file.lastIndexOf('.');
+    if (idx <= 0 || idx === file.length - 1) return null;
+    const ext = file.slice(idx + 1).toLowerCase();
+    return EXTENSION_LANGUAGE_MAP[ext] || null;
+  }
+
+  ensureVirtualOutput(cellContext) {
+    if (!cellContext) return;
+    const host = cellContext.outputBody || cellContext.outputContent;
+    if (!host) return;
+    const existing = host.querySelector('.cell-output-text');
+    if (!existing) return;
+
+    if (existing.dataset.virtualized === '1') {
+      if (!this.virtualOutputs.has(existing)) {
+        this.rebindVirtualOutput(existing);
+      }
+      return;
+    }
+
+    const rawText = existing.dataset.rawOutput || existing.textContent || '';
+    const replacement = this.createVirtualOutputElement();
+    replacement.dataset.syntaxMode = cellContext?.syntaxMode || '';
+    this.updateOutputPreText(replacement, rawText, { language: replacement.dataset.syntaxMode });
+    existing.replaceWith(replacement);
+
+    if (this.currentCommand && this.currentCommand.outputPre === existing) {
+      this.currentCommand.outputPre = replacement;
+    }
+    if (this.lastFinalizedCommand && this.lastFinalizedCommand.outputPre === existing) {
+      this.lastFinalizedCommand.outputPre = replacement;
+    }
+  }
+
+  rebindVirtualOutput(el) {
+    if (!el) return;
+    const spacer = el.querySelector('.cell-output-virtual-spacer');
+    const viewport = el.querySelector('.cell-output-virtual-viewport');
+    if (!spacer || !viewport) {
+      // Fallback: recreate from scratch
+      const rawText = el.dataset.rawOutput || el.textContent || '';
+      const replacement = this.createVirtualOutputElement();
+      replacement.dataset.syntaxMode = el.dataset.syntaxMode || '';
+      this.updateOutputPreText(replacement, rawText, { language: replacement.dataset.syntaxMode });
+      el.replaceWith(replacement);
+      return;
+    }
+
+    const state = {
+      spacerEl: spacer,
+      viewportEl: viewport,
+      lines: [],
+      text: '',
+      lineHeight: 0,
+      renderStart: 0,
+      renderEnd: 0,
+      lastScrollTop: -1,
+      lastClientHeight: -1,
+      pendingFrame: null,
+      resizeObserver: null
+    };
+
+    const raw = el.dataset.rawOutput || '';
+    state.text = raw;
+    state.lines = raw ? raw.split('\n') : [''];
+    this.virtualOutputs.set(el, state);
+
+    const onScroll = () => {
+      this.updateVirtualViewport(el);
+    };
+    if (el.__smrtVirtualScrollHandler) {
+      try { el.removeEventListener('scroll', el.__smrtVirtualScrollHandler); } catch (_) {}
+    }
+    state.scrollHandler = onScroll;
+    el.__smrtVirtualScrollHandler = onScroll;
+    el.addEventListener('scroll', onScroll);
+
+    if (el.__smrtVirtualResizeObserver) {
+      try { el.__smrtVirtualResizeObserver.disconnect(); } catch (_) {}
+      el.__smrtVirtualResizeObserver = null;
+    }
+
+    if (typeof ResizeObserver !== 'undefined') {
+      try {
+        state.resizeObserver = new ResizeObserver(() => {
+          this.refreshVirtualMetrics(el);
+          this.updateVirtualViewport(el, { force: true });
+        });
+        state.resizeObserver.observe(el);
+        el.__smrtVirtualResizeObserver = state.resizeObserver;
+      } catch (_) {
+        state.resizeObserver = null;
+      }
+    }
+
+    requestAnimationFrame(() => {
+      this.refreshVirtualMetrics(el);
+      this.updateVirtualViewport(el, { force: true });
+    });
   }
 
 
@@ -2169,13 +3024,30 @@ export class ChatTerminal {
   }
 
   updateInputAffordances() {
-    if (!this.input) return;
+    if (!this.input) {
+      ChatTerminal.updateExecuteButtonState();
+      return;
+    }
 
-    // Disable input if terminal is not ready
+    if (!this.isActive) {
+      ChatTerminal.updateExecuteButtonState();
+      return;
+    }
+
+    if (this.isRestarting) {
+      const placeholder = i18n?.t?.('input.restart', '会话正在重启，请稍候…') || '会话正在重启，请稍候…';
+      this.input.disabled = true;
+      this.input.placeholder = placeholder;
+      this.input.title = placeholder;
+      ChatTerminal.updateExecuteButtonState();
+      return;
+    }
+
     if (!this.terminalReady) {
       this.input.disabled = true;
       this.input.placeholder = 'Terminal is initializing...';
       this.input.title = 'Please wait for terminal to be ready';
+      ChatTerminal.updateExecuteButtonState();
       return;
     }
 
@@ -2190,6 +3062,7 @@ export class ChatTerminal {
     }
 
     this.updateInputPrompt();
+    ChatTerminal.updateExecuteButtonState();
   }
 
   // Fast pre-cleaning of control/ANSI/OSC for display buffer to reduce render work
@@ -2277,9 +3150,11 @@ export class ChatTerminal {
       }
     } else {
       const preEl = this.currentCommand.outputPre;
+      const syntaxMode = cellContext?.syntaxMode || '';
+      preEl.dataset.syntaxMode = syntaxMode;
       let prevScrollTop = 0;
       if (cellContext?.collapsed) prevScrollTop = preEl.scrollTop;
-      this.updateOutputPreText(preEl, cleanOutput);
+      this.updateOutputPreText(preEl, cleanOutput, { language: syntaxMode });
       if (cellContext?.collapsed) {
         if (cellContext.autoFollow) {
           preEl.scrollTop = preEl.scrollHeight - preEl.clientHeight;
@@ -2333,10 +3208,16 @@ export class ChatTerminal {
   }
 
   handleTerminalOutput(data) {
-    // If there's no current command but there are queued commands, start processing
+    const hasQueuedCommands = this.commandQueue.length > 0;
+    // If there's no current command, decide whether the chunk belongs to trailing output
+    // or we should immediately start the next queued command.
     if (!this.currentCommand) {
-      // Check if we have a recently finalized command that might still receive output
-      if (this.lastFinalizedCommand && this.lastFinalizedCommand.outputPre) {
+      const canAppendToLast =
+        !hasQueuedCommands &&
+        this.lastFinalizedCommand &&
+        this.lastFinalizedCommand.outputPre;
+
+      if (canAppendToLast) {
         const timeSinceFinalize = Date.now() - (this.lastFinalizedCommand.finalizeTime || 0);
         // Allow 5 seconds buffer to receive trailing output after finalization
         // This handles cases where commands continue producing output after prompt detection
@@ -2347,7 +3228,8 @@ export class ChatTerminal {
             this.lastFinalizedCommand.output,
             this.lastFinalizedCommand.command
           );
-          this.updateOutputPreText(this.lastFinalizedCommand.outputPre, cleanTail);
+          const tailLang = this.lastFinalizedCommand.syntaxMode || this.lastFinalizedCommand?.cellContext?.syntaxMode || '';
+          this.updateOutputPreText(this.lastFinalizedCommand.outputPre, cleanTail, { language: tailLang });
 
           // Update the cell context if available
           if (this.lastFinalizedCommand.cellContext) {
@@ -2361,7 +3243,7 @@ export class ChatTerminal {
         }
       }
 
-      if (this.commandQueue.length > 0 && !this.isCommandRunning) {
+      if (hasQueuedCommands && !this.isCommandRunning) {
         this.processCommandQueue();
       }
       // If still no current command, return early
@@ -2376,26 +3258,16 @@ export class ChatTerminal {
       this.dbg('chunk preview', this.formatDebugPreview(rawChunk));
     }
     // Decide whether to suppress output during alt-screen/sync-output
-    const entersAltOrSync = /\x1b\[\?1049h|\x1b\[\?47h|\x1b\[\?2026h/.test(rawChunk);
-    const leavesAltOrSync = /\x1b\[\?1049l|\x1b\[\?47l|\x1b\[\?2026l/.test(rawChunk);
-    const inAltOrSyncNow = (this.currentCommand.altScreenActive || this.currentCommand.syncOutputActive || entersAltOrSync) && !leavesAltOrSync;
+    const disableAltScreenSuppression = Boolean(this.currentCommand?.disableAltScreenSuppression);
     let displayChunk = '';
-    if (!inAltOrSyncNow) {
-      // Pre-clean control/ANSI for display buffer to reduce render work
+    if (rawChunk) {
+      // Always sanitize chunks so interactive programs remain visible in the transcript
       displayChunk = this.preCleanChunk(rawChunk);
-      // Append sanitized chunk to output buffer
       this.currentCommand.output += displayChunk;
       this._outputIsSanitized = true;
-    } else {
-      // Suppress TUI/alt-screen garbage in visible output; show a small placeholder instead
-      this.currentCommand.tuiSuppressedBytes = (this.currentCommand.tuiSuppressedBytes || 0) + rawChunk.length;
-      const bytes = this.currentCommand.tuiSuppressedBytes;
-      const note = `(interactive screen output suppressed… ${bytes} bytes)`;
-      if (!this.currentCommand.outputPre) {
-        const preEl = this.renderCellOutput(this.currentCommand.cellContext, note);
-        this.currentCommand.outputPre = preEl;
-      } else {
-        this.updateOutputPreText(this.currentCommand.outputPre, note);
+      // Reset suppressed byte tracking since we now stream the actual content
+      if (this.currentCommand.tuiSuppressedBytes) {
+        this.currentCommand.tuiSuppressedBytes = 0;
       }
     }
     // Cap buffer to avoid unbounded growth
@@ -2445,6 +3317,18 @@ export class ChatTerminal {
         this.currentCommand.isInteractive = true;
         this.currentCommand.isInteractiveHeuristic = true;
       }
+      if (!this.currentCommand.isInteractive) {
+        const sanitizedChunk = (displayChunk || '').replace(/\r/g, '');
+        const bufferTail = (this.currentCommand.promptBuffer || '').slice(-200);
+        const promptPattern = /(?:password|passphrase|passcode|otp|pin|verification\s+code|username)\s*[:：]\s*$/i;
+        const confirmPattern = /(?:\benter\s+(?:password|passphrase|pin|otp)\b|\bpress\s+(?:enter|return)\b|\b(?:yes\/no|y\/n)\b|\bcontinue\?\s*)$/i;
+        if (promptPattern.test(sanitizedChunk) || promptPattern.test(bufferTail) ||
+            confirmPattern.test(sanitizedChunk) || confirmPattern.test(bufferTail)) {
+          this.dbg('prompt patterns detected; enabling interactive input');
+          this.currentCommand.isInteractive = true;
+          this.currentCommand.isInteractiveHeuristic = true;
+        }
+      }
     }
 
     if (!this.currentCommand.outputPre) {
@@ -2473,13 +3357,18 @@ export class ChatTerminal {
 
     // Track alt-screen/sync-output toggles to avoid false prompt detection
     try {
-      const chunk = typeof data === 'string' ? data : '';
-      if (!this.currentCommand.altScreenActive) this.currentCommand.altScreenActive = false;
-      if (!this.currentCommand.syncOutputActive) this.currentCommand.syncOutputActive = false;
-      if (/\x1b\[\?1049h|\x1b\[\?47h/.test(chunk)) this.currentCommand.altScreenActive = true;
-      if (/\x1b\[\?1049l|\x1b\[\?47l/.test(chunk)) this.currentCommand.altScreenActive = false;
-      if (/\x1b\[\?2026h/.test(chunk)) this.currentCommand.syncOutputActive = true;
-      if (/\x1b\[\?2026l/.test(chunk)) this.currentCommand.syncOutputActive = false;
+      if (!disableAltScreenSuppression) {
+        const chunk = typeof data === 'string' ? data : '';
+        if (!this.currentCommand.altScreenActive) this.currentCommand.altScreenActive = false;
+        if (!this.currentCommand.syncOutputActive) this.currentCommand.syncOutputActive = false;
+        if (/\x1b\[\?1049h|\x1b\[\?47h/.test(chunk)) this.currentCommand.altScreenActive = true;
+        if (/\x1b\[\?1049l|\x1b\[\?47l/.test(chunk)) this.currentCommand.altScreenActive = false;
+        if (/\x1b\[\?2026h/.test(chunk)) this.currentCommand.syncOutputActive = true;
+        if (/\x1b\[\?2026l/.test(chunk)) this.currentCommand.syncOutputActive = false;
+      } else {
+        this.currentCommand.altScreenActive = false;
+        this.currentCommand.syncOutputActive = false;
+      }
     } catch (_) {}
 
     // For interactive commands, finalize after seeing substantial output AND detecting a prompt
@@ -2574,7 +3463,8 @@ export class ChatTerminal {
       command,
       outputPre,
       cellContext,
-      finalizeTime: Date.now()
+      finalizeTime: Date.now(),
+      syntaxMode: cellContext?.syntaxMode || ''
     };
 
     let cleanOutput = this.cleanTerminalOutput(output, command);
@@ -2602,7 +3492,9 @@ export class ChatTerminal {
         const isAtBottom = Math.abs(preEl.scrollHeight - preEl.clientHeight - preEl.scrollTop) < 4;
         preEl.dataset.autoScroll = isAtBottom ? '1' : '0';
       }
-      this.updateOutputPreText(preEl, cleanOutput);
+      const syntaxMode = cellContext?.syntaxMode || '';
+      preEl.dataset.syntaxMode = syntaxMode;
+      this.updateOutputPreText(preEl, cleanOutput, { language: syntaxMode });
       if (cellContext?.collapsed) {
         if (cellContext.autoFollow || preEl.dataset.autoScroll === '1') {
           preEl.scrollTop = preEl.scrollHeight - preEl.clientHeight;
@@ -2635,6 +3527,7 @@ export class ChatTerminal {
 
     this.setCommandRunning(false, cellContext);
     this.currentCommand = null;
+    this.lastCommand = null;
     this.commandBusyWarningShown = false;
     this.saveMessageHistory();
     this.processCommandQueue();
@@ -2726,11 +3619,15 @@ export class ChatTerminal {
       this.statusEl.textContent = isRunning ? 'Running…' : '';
     }
 
+    if (ChatTerminal.activeInstance === this) {
+      ChatTerminal.updateExecuteButtonState();
+    }
+
     const ctx = cellContext || this.currentCommand?.cellContext;
     if (ctx) {
       if (ctx.commandPre) {
         if (isRunning) {
-          this.disableCommandEditing(ctx);
+          this.disableCommandEditing(ctx, { preserveFocus: Boolean(ctx?.fromRerun) });
         } else {
           this.restoreCommandEditing(ctx);
         }
@@ -2763,13 +3660,17 @@ export class ChatTerminal {
     }
 
     // Check if this command was a rerun from history
-    const fromRerun = this.currentCommand?.fromRerun || false;
+    const fromRerun = Boolean(ctx?.fromRerun);
 
     if (!isRunning) {
-      // For rerun commands, keep focus on the cell instead of moving to input
-      if (!fromRerun) {
+      const restoreEditor = fromRerun || Boolean(ctx?.resumeEditingAfterRun);
+      if (restoreEditor && ctx?.cellEl) {
+        this.selectCell(ctx.cellEl, { preventScroll: true });
+        this.focusCommandEditor(ctx, { preventScroll: true, collapseToEnd: true });
+      } else if (!fromRerun) {
         this.input?.focus();
       }
+      if (ctx) ctx.resumeEditingAfterRun = false;
     }
 
     // For rerun commands, don't scroll at all - stay in current position
@@ -2784,6 +3685,18 @@ export class ChatTerminal {
       } catch (err) {
         console.error('[chat-terminal] onCommandRunningChange error:', err);
       }
+    }
+  }
+
+  setRestarting(isRestarting) {
+    const next = Boolean(isRestarting);
+    if (this.isRestarting === next) return;
+    this.isRestarting = next;
+    if (ChatTerminal.activeInstance === this) {
+      ChatTerminal.updateExecuteButtonState();
+    }
+    if (this.isActive) {
+      this.updateInputAffordances();
     }
   }
 
@@ -2854,6 +3767,41 @@ export class ChatTerminal {
     return null;
   }
 
+  parseViewCommand(input) {
+    if (typeof input !== 'string') return null;
+    const trimmed = input.trim();
+    if (!trimmed.toLowerCase().startsWith('/view')) return null;
+    const rawArgument = trimmed.slice(5).trim();
+    return {
+      rawArgument,
+      path: this.normalizeViewPathArgument(rawArgument)
+    };
+  }
+
+  normalizeViewPathArgument(arg) {
+    if (typeof arg !== 'string') return '';
+    const trimmed = arg.trim();
+    if (!trimmed) return '';
+    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+        (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+      const inner = trimmed.slice(1, -1);
+      return inner.replace(/\\(["'\\])/g, '$1').trim();
+    }
+    return trimmed;
+  }
+
+  detectViewKind(filePath) {
+    if (!filePath || typeof filePath !== 'string') return null;
+    const lower = filePath.toLowerCase();
+    if (/(\.md|\.mdown|\.markdown|\.mkd|\.mdtxt|\.mdtext)$/i.test(lower)) {
+      return 'markdown';
+    }
+    if (/(\.png|\.jpe?g|\.gif|\.bmp|\.webp|\.svg)$/i.test(lower)) {
+      return 'image';
+    }
+    return null;
+  }
+
   /**
    * Detect command mode based on input
    * @param {string} commandText - Command text
@@ -2864,6 +3812,7 @@ export class ChatTerminal {
 
     if (trimmed.startsWith('/upload ')) return 'upload';
     if (trimmed.startsWith('/download ')) return 'download';
+    if (trimmed.startsWith('/view ')) return 'view';
     if (trimmed.startsWith('#') || trimmed.includes('```')) return 'markdown';
 
     return 'command';
@@ -2915,6 +3864,222 @@ export class ChatTerminal {
     } catch (err) {
       console.error(`[transfer] ${type} failed:`, err);
       this.renderCellOutput(cellContext, `Error: ${err.message}`, { isError: true });
+    }
+  }
+
+  async handleViewCommand(rawCommand, viewInfo, existingContext = null) {
+    const resolvedPathInput = viewInfo?.path;
+    if (!resolvedPathInput) {
+      this.addSystemMessage(i18n.t('command.view.missingPath', '请提供要预览的文件路径'), '⚠️');
+      return;
+    }
+
+    const viewKind = this.detectViewKind(resolvedPathInput);
+    if (!viewKind) {
+      this.addSystemMessage(i18n.t('command.view.unsupported', '暂不支持预览该类型文件'), '⚠️');
+      return;
+    }
+
+    if (!window?.sm?.fs?.readFile) {
+      this.addSystemMessage(i18n.t('command.view.notAvailable', '当前版本暂不支持 /view 功能'), '⚠️');
+      return;
+    }
+
+    const tabState = typeof this.getTabState === 'function' ? this.getTabState() : null;
+    const backendMode = (tabState && (tabState.backendMode || tabState.mode)) || 'pty';
+    const isRemote = typeof backendMode === 'string' && backendMode.includes('ssh');
+    if (isRemote) {
+      let tempContext = existingContext;
+      if (!tempContext) {
+        tempContext = this.addUserMessage(rawCommand, { startEditing: false, selectCell: false });
+      }
+      if (tempContext) {
+        tempContext.cellEl?.classList.add('mode-view');
+        const execIndex = this.cellCounter++;
+        this.applyExecutionIndex(tempContext, execIndex);
+        this.renderViewError(tempContext, {
+          code: 'REMOTE_UNSUPPORTED',
+          message: i18n.t('command.view.remoteUnsupported', '远程会话暂不支持 /view 预览'),
+          meta: { path: resolvedPathInput }
+        }, resolvedPathInput);
+        this.updateControlButtonStates(tempContext);
+      } else {
+        this.addSystemMessage(i18n.t('command.view.remoteUnsupported', '远程会话暂不支持 /view 预览'), '⚠️');
+      }
+      return;
+    }
+
+    const isRerun = Boolean(existingContext);
+    if (!isRerun) {
+      this.recordCommandHistory(rawCommand);
+      this.updateCommandStats(rawCommand);
+    }
+
+    let cellContext = existingContext;
+    if (!cellContext) {
+      cellContext = this.addUserMessage(rawCommand, { startEditing: false, selectCell: false });
+    }
+    if (!cellContext) return;
+
+    if (cellContext.cellEl) {
+      cellContext.cellEl.classList.remove('mode-command', 'mode-upload', 'mode-download');
+      cellContext.cellEl.classList.add('mode-view');
+    }
+    cellContext.viewMeta = { path: resolvedPathInput, kind: viewKind };
+
+    const executionIndex = this.cellCounter++;
+    this.applyExecutionIndex(cellContext, executionIndex);
+
+    const loadingEl = this.addLoadingMessage(cellContext);
+    if (loadingEl && typeof loadingEl.querySelector === 'function') {
+      const textNode = loadingEl.querySelector('span');
+      if (textNode) {
+        textNode.textContent = i18n.t('command.view.loading', '正在加载预览…');
+      }
+    }
+
+    try {
+      const cwd = tabState?.cwd || this.pathCompleter?.currentDir || '';
+      const maxBytes = viewKind === 'image'
+        ? ChatTerminal.VIEW_MAX_IMAGE_BYTES
+        : ChatTerminal.VIEW_MAX_TEXT_BYTES;
+
+      const readRes = await window.sm.fs.readFile({
+        path: resolvedPathInput,
+        cwd,
+        maxBytes,
+        encoding: viewKind === 'image' ? null : 'utf8'
+      });
+
+      if (!readRes?.ok) {
+        const err = new Error(readRes?.error || 'READ_FAILED');
+        err.code = readRes?.error;
+        err.meta = readRes?.data || null;
+        throw err;
+      }
+
+      const data = readRes.data || {};
+      this.renderViewPreview(cellContext, {
+        requestedPath: resolvedPathInput,
+        resolvedPath: data.path || resolvedPathInput,
+        content: data.content || '',
+        size: data.size ?? null,
+        mtime: data.mtime ?? null,
+        kind: viewKind,
+        mime: data.mime || null,
+        encoding: data.encoding || (viewKind === 'image' ? 'base64' : 'utf8')
+      });
+    } catch (err) {
+      this.renderViewError(cellContext, err, resolvedPathInput);
+    } finally {
+      if (loadingEl) this.removeLoadingMessage(loadingEl);
+      if (isRerun) {
+        this.restoreCommandEditing(cellContext);
+        this.focusCommandEditor(cellContext, { preventScroll: true, collapseToEnd: true });
+        this.clearComposerSelection();
+      }
+      this.updateControlButtonStates(cellContext);
+      if (cellContext) cellContext.resumeEditingAfterRun = false;
+      this.markDirty();
+    }
+  }
+
+  renderViewPreview(cellContext, payload) {
+    if (!cellContext?.outputRow || !cellContext.outputBody) return;
+    const {
+      requestedPath,
+      resolvedPath,
+      content,
+      size,
+      kind,
+      mime
+    } = payload || {};
+
+    const displayName = this.getFileNameFromPath(resolvedPath || requestedPath) ||
+      requestedPath || resolvedPath || '(file)';
+    const sizeLabel = typeof size === 'number' && size >= 0
+      ? this.formatFileSize(size)
+      : '';
+    const kindLabel = kind === 'image'
+      ? i18n.t('command.view.kind.image', '图像')
+      : i18n.t('command.view.kind.markdown', 'Markdown');
+    const metaParts = [];
+    if (kindLabel) metaParts.push(kindLabel);
+    if (sizeLabel) metaParts.push(sizeLabel);
+    if (mime && kind === 'image') metaParts.push(mime);
+
+    const metaHtml = metaParts.length
+      ? `<span class="view-preview-meta">${this.escapeHtml(metaParts.join(' • '))}</span>`
+      : '';
+
+    let bodyInner = '';
+    if (kind === 'image') {
+      bodyInner = `<img src="${content}" alt="${this.escapeHtml(displayName)}" loading="lazy" />`;
+    } else {
+      const markdown = typeof content === 'string' ? content.replace(/\r\n/g, '\n') : '';
+      bodyInner = `<div class="view-preview-markdown">${this.markdownRenderer.renderMarkdown(markdown)}</div>`;
+    }
+
+    cellContext.outputRow.classList.remove('hidden');
+    const resolvedDisplay = resolvedPath && resolvedPath !== displayName
+      ? `<div class="view-preview-meta">${this.escapeHtml(resolvedPath)}</div>`
+      : '';
+
+    if (cellContext.outputBody) {
+      cellContext.outputBody.innerHTML = `
+        <div class="view-preview">
+          <div class="view-preview-header">
+            <span class="view-preview-filename">${this.escapeHtml(displayName)}</span>
+            ${metaHtml}
+          </div>
+          ${resolvedDisplay}
+          <div class="view-preview-body">${bodyInner}</div>
+        </div>
+      `;
+    }
+    if (cellContext.outputTimer) {
+      cellContext.outputTimer.classList.add('hidden');
+      cellContext.outputTimer.textContent = '00:00:00';
+    }
+    this.scrollToBottom();
+  }
+
+  renderViewError(cellContext, error, requestedPath) {
+    if (!cellContext?.outputRow || !cellContext.outputBody) return;
+    const code = error?.code || '';
+    const meta = error?.meta || {};
+    const resolvedPath = meta.path || requestedPath || '';
+    let message = error?.message || meta.message || String(error || '');
+    if (code === 'FILE_TOO_LARGE') {
+      const limit = typeof meta.limit === 'number' ? this.formatFileSize(meta.limit) : '';
+      const actual = typeof meta.size === 'number' ? this.formatFileSize(meta.size) : '';
+      message = i18n.t('command.view.tooLarge', '文件过大，无法预览（限制 {{limit}}，实际 {{size}}）', {
+        limit,
+        size: actual
+      });
+    } else if (code === 'ENOENT') {
+      message = i18n.t('command.view.notFound', '未找到文件：{{path}}', { path: requestedPath || '' });
+    } else if (message === 'READ_FAILED') {
+      message = i18n.t('command.view.readFailed', '读取文件失败');
+    }
+
+    cellContext.outputRow.classList.remove('hidden');
+    const displayName = this.getFileNameFromPath(resolvedPath) || resolvedPath || '(file)';
+    const pathLine = resolvedPath
+      ? `<div class="view-preview-meta">${this.escapeHtml(resolvedPath)}</div>`
+      : '';
+    cellContext.outputBody.innerHTML = `
+      <div class="view-preview">
+        <div class="view-preview-header">
+          <span class="view-preview-filename">${this.escapeHtml(displayName)}</span>
+        </div>
+        ${pathLine}
+        <div class="view-preview-error">${this.escapeHtml(message)}</div>
+      </div>
+    `;
+    if (cellContext.outputTimer) {
+      cellContext.outputTimer.classList.add('hidden');
+      cellContext.outputTimer.textContent = '00:00:00';
     }
   }
 
@@ -3226,6 +4391,8 @@ export class ChatTerminal {
     const escapedCmd = this.escapeRegExp(command);
     // Avoid passing empty flags string to RegExp (Safari/WebKit can throw "missing /")
     clean = clean.replace(new RegExp(`^${escapedCmd}\\s*\\n`), '');
+    // Remove prompt-prefixed command echoes (e.g., "user@host:~# cmd")
+    clean = clean.replace(new RegExp(`^[^\\n]*[#$%>❯»]\\s*${escapedCmd}(?:\\s.*)?\\n?`, 'gm'), '');
 
     // Step 3: Remove ALL ANSI escape sequences (colors, cursor movements, etc.)
     // This must be done BEFORE trying to match prompts
@@ -3249,9 +4416,28 @@ export class ChatTerminal {
     clean = clean.replace(/^.*[#$%>❯»]\s*$/gm, '');
     clean = clean.replace(/.*[#$%>❯»]\s*$/, '');
 
+    // Remove prompt-prefixed command echoes emitted after redraws
+    const promptCommandPattern = new RegExp(
+      `^(?:[^\n]*[#$%>❯»]\s*)?${escapedCmd}(?:\s.*)?$`,
+      'gm'
+    );
+    clean = clean.replace(promptCommandPattern, '');
+
     // Step 7: Clean up whitespace
     clean = clean.replace(/\n{3,}/g, '\n\n');
     clean = clean.trim();
+
+    // Step 7.5: Collapse consecutive duplicate lines caused by terminal redraws
+    if (clean) {
+      const lines = clean.split('\n');
+      const deduped = [];
+      for (const line of lines) {
+        if (deduped.length === 0 || deduped[deduped.length - 1] !== line) {
+          deduped.push(line);
+        }
+      }
+      clean = deduped.join('\n');
+    }
 
     // Step 8: If everything was removed but we had output, show placeholder
     if (!clean && output && output.length > 0) {
@@ -3525,6 +4711,7 @@ export class ChatTerminal {
     if (this.isActive === nextState) return;
     this.isActive = nextState;
     if (this.isActive) {
+      ChatTerminal.activeInstance = this;
       this.selectComposer();
       this.updateInputAffordances();
       this.positionSuggestionsDropdown();
@@ -3532,7 +4719,11 @@ export class ChatTerminal {
       this.clearComposerSelection();
       this.clearCellSelection();
       this.hideSuggestions();
+      if (ChatTerminal.activeInstance === this) {
+        ChatTerminal.activeInstance = null;
+      }
     }
+    ChatTerminal.updateExecuteButtonState();
   }
 
   // Helper function to escape shell commands to prevent issues with special characters
@@ -3758,6 +4949,30 @@ export class ChatTerminal {
     return caretPos;
   }
 
+  getSelectionBoundsInContentEditable(element) {
+    const sel = window.getSelection?.();
+    if (!sel || sel.rangeCount === 0) {
+      const pos = this.getCursorPositionInContentEditable(element);
+      return { start: pos, end: pos };
+    }
+    const range = sel.getRangeAt(0);
+    if (!element.contains(range.startContainer) || !element.contains(range.endContainer)) {
+      const pos = this.getCursorPositionInContentEditable(element);
+      return { start: pos, end: pos };
+    }
+    const startRange = range.cloneRange();
+    startRange.selectNodeContents(element);
+    startRange.setEnd(range.startContainer, range.startOffset);
+    const start = startRange.toString().length;
+
+    const endRange = range.cloneRange();
+    endRange.selectNodeContents(element);
+    endRange.setEnd(range.endContainer, range.endOffset);
+    const end = endRange.toString().length;
+
+    return { start, end };
+  }
+
   /**
    * Set cursor position in contentEditable element
    */
@@ -3793,6 +5008,21 @@ export class ChatTerminal {
     if (found) {
       sel.removeAllRanges();
       sel.addRange(range);
+    }
+  }
+
+  replaceSelectionInContentEditable(element, text, bounds = null) {
+    if (!element) return;
+    const content = element.textContent || '';
+    const selection = bounds || this.getSelectionBoundsInContentEditable(element);
+    const start = Math.max(0, Math.min(selection.start, content.length));
+    const end = Math.max(start, Math.min(selection.end, content.length));
+    const before = content.slice(0, start);
+    const after = content.slice(end);
+    element.textContent = before + text + after;
+    this.setCursorPositionInContentEditable(element, before.length + text.length);
+    if (typeof element.dispatchEvent === 'function') {
+      element.dispatchEvent(new Event('input', { bubbles: true }));
     }
   }
 
@@ -4287,3 +5517,9 @@ export class ChatTerminal {
     this.setInputMode(this.savedInputMode || 'code', { silent: true });
   }
 }
+
+ChatTerminal.executeButton = null;
+ChatTerminal._executeClickHandler = null;
+ChatTerminal.activeInstance = null;
+ChatTerminal._copyListenerRegistered = false;
+ChatTerminal._copyListener = null;

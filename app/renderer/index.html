@@ -17,11 +17,11 @@
     <div class="toolbar-left">
       <div class="app-title">
         <img src="assets/logo.svg" alt="SmartTerminal" class="app-logo" />
-        <span>SmartTerminal</span>
+        <span data-i18n="app.title">SmartTerminal</span>
       </div>
       <!-- Tab Bar -->
       <div class="tab-bar-inline">
-        <button id="tabScrollLeft" class="tab-scroll-btn tab-scroll-left" aria-label="Scroll tabs left">
+        <button id="tabScrollLeft" class="tab-scroll-btn tab-scroll-left" aria-label="Scroll tabs left" data-i18n-aria-label="aria.scrollLeft">
           <svg viewBox="0 0 16 16" width="16" height="16">
             <path fill="currentColor" d="M10.5 3.5L6 8l4.5 4.5L9 14 3 8l6-6z"/>
           </svg>
@@ -29,7 +29,7 @@
         <div class="tabs-scroll-container">
           <div id="tabs" class="tabs"></div>
         </div>
-        <button id="tabScrollRight" class="tab-scroll-btn tab-scroll-right" aria-label="Scroll tabs right">
+        <button id="tabScrollRight" class="tab-scroll-btn tab-scroll-right" aria-label="Scroll tabs right" data-i18n-aria-label="aria.scrollRight">
           <svg viewBox="0 0 16 16" width="16" height="16">
             <path fill="currentColor" d="M5.5 3.5L10 8l-4.5 4.5L7 14l6-6-6-6z"/>
           </svg>
@@ -59,28 +59,16 @@
     <section class="home-features-section">
       <div class="home-features-grid">
         <div class="home-feature-card">
-          <h3 class="home-feature-title" data-i18n="feature.smartTerminal">智能命令行</h3>
-          <p class="home-feature-desc" data-i18n="feature.smartTerminal.desc">集成AI辅助，实时命令建议与智能补全</p>
+          <h3 class="home-feature-title" data-i18n="feature.coreWorkspace">统一命令工作台</h3>
+          <p class="home-feature-desc" data-i18n="feature.coreWorkspace.desc">AI提示、快捷执行与多标签终端融为一体</p>
         </div>
         <div class="home-feature-card">
-          <h3 class="home-feature-title" data-i18n="feature.structuredNotes">结构化笔记</h3>
-          <p class="home-feature-desc" data-i18n="feature.structuredNotes.desc">Markdown支持，命令与文档完美融合</p>
+          <h3 class="home-feature-title" data-i18n="feature.sessionHistory">上下文历史管理</h3>
+          <p class="home-feature-desc" data-i18n="feature.sessionHistory.desc">历史卡片、收藏与回收站让常用命令随取随用</p>
         </div>
         <div class="home-feature-card">
-          <h3 class="home-feature-title" data-i18n="feature.sessionManagement">对话管理</h3>
-          <p class="home-feature-desc" data-i18n="feature.sessionManagement.desc">多会话并行，历史记录随时恢复</p>
-        </div>
-        <div class="home-feature-card">
-          <h3 class="home-feature-title" data-i18n="feature.dualMode">双模式切换</h3>
-          <p class="home-feature-desc" data-i18n="feature.dualMode.desc">Chat与Terminal无缝切换，适配不同场景</p>
-        </div>
-        <div class="home-feature-card">
-          <h3 class="home-feature-title" data-i18n="feature.autoSave">自动保存</h3>
-          <p class="home-feature-desc" data-i18n="feature.autoSave.desc">实时持久化，工作状态永不丢失</p>
-        </div>
-        <div class="home-feature-card">
-          <h3 class="home-feature-title" data-i18n="feature.shortcuts">高效快捷键</h3>
-          <p class="home-feature-desc" data-i18n="feature.shortcuts.desc">Shift+Enter执行，Esc清空，流畅操作</p>
+          <h3 class="home-feature-title" data-i18n="feature.richPreview">丰富回显与预览</h3>
+          <p class="home-feature-desc" data-i18n="feature.richPreview.desc">结构化Out区域，/view即时预览Markdown与图片</p>
         </div>
       </div>
     </section>
@@ -428,29 +416,54 @@
               id="commandInput"
               class="command-input"
               placeholder="Type a command and press Enter..."
+              data-i18n-placeholder="input.command"
               rows="1"
               autocomplete="off"
               spellcheck="false"
             ></textarea>
+            <button
+              id="commandExecuteBtn"
+              class="command-execute-btn cell-execute-btn"
+              type="button"
+              title="执行命令"
+              data-i18n-title="command.execute.title"
+              data-i18n-aria-label="command.execute.aria"
+            >
+              <span class="cell-execute-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false">
+                  <path d="M8.5 6.75a1 1 0 011.53-.85l7.5 4.75a1 1 0 010 1.7l-7.5 4.75A1 1 0 018 16.25V7.75a1 1 0 01.5-.87z" fill="currentColor"/>
+                </svg>
+              </span>
+              <span class="visually-hidden" data-i18n="command.execute.short">执行</span>
+            </button>
           </div>
         </div>
         <!-- Command Suggestions Dropdown -->
         <div class="command-suggestions hidden" id="commandSuggestions">
           <div class="suggestions-header">
-            Suggestions
-            <span class="suggestions-hint">↑↓ Navigate • Enter Select • Esc Close</span>
+            <span data-i18n="suggestions.title">智能建议</span>
+            <span class="suggestions-hint" data-i18n="suggestions.hint">↑↓ 导航 • Enter 选择 • Esc 关闭</span>
           </div>
           <div class="suggestions-list" id="suggestionsList"></div>
         </div>
       </div>
 
+      <template id="tabRestartOverlayTemplate">
+        <div class="tab-restart-overlay hidden" role="status" aria-live="polite">
+          <div class="restart-overlay">
+            <div class="restart-spinner"></div>
+            <div class="restart-text" data-i18n="session.restart.inProgress">正在重启会话…</div>
+          </div>
+        </div>
+      </template>
+
         <!-- Chat Context Menu -->
         <div id="chatContextMenu" class="context-menu hidden">
           <div class="context-menu-item" data-action="copy">
-            <span>Copy</span>
+            <span data-i18n="context.copy">复制</span>
           </div>
           <div class="context-menu-item" data-action="selectAll">
-            <span>Select All</span>
+            <span data-i18n="context.selectAll">全选</span>
           </div>
         </div>
       </div>
@@ -464,10 +477,10 @@
   <!-- Transfer Drawer -->
   <div id="txDrawer" class="transfer-drawer hidden">
     <div class="transfer-drawer-header">
-      <div class="transfer-drawer-title">File Transfers</div>
+      <div class="transfer-drawer-title" data-i18n="transfers.drawerTitle">文件传输</div>
       <div class="transfer-drawer-actions">
-        <span id="txCount" class="transfer-count">0 active</span>
-        <button class="icon-btn small" id="txCloseBtn" title="Close">✕</button>
+        <span id="txCount" class="transfer-count">0 个活动任务</span>
+        <button class="icon-btn small" id="txCloseBtn" title="Close" data-i18n-title="transfers.close">✕</button>
       </div>
     </div>
     <div id="txList" class="transfer-list"></div>
@@ -492,29 +505,31 @@
   <!-- File Context Menu -->
   <div id="fileContextMenu" class="context-menu hidden">
     <div class="context-menu-item" data-action="rename">
-      <span>Rename</span>
+      <span data-i18n="context.rename">重命名</span>
       <span class="context-menu-shortcut">F2</span>
     </div>
     <div class="context-menu-item" data-action="delete">
-      <span>Delete</span>
+      <span data-i18n="context.delete">删除</span>
       <span class="context-menu-shortcut">Del</span>
     </div>
     <div class="context-menu-separator"></div>
     <div class="context-menu-item" data-action="newFolder">
-      <span>New Folder</span>
+      <span data-i18n="context.newFolder">新建文件夹</span>
     </div>
     <div class="context-menu-item" data-action="newFile">
-      <span>New File</span>
+      <span data-i18n="context.newFile">新建文件</span>
     </div>
     <div class="context-menu-separator"></div>
     <div class="context-menu-item" data-action="copyPath">
-      <span>Copy Path</span>
+      <span data-i18n="context.copyPath">复制路径</span>
     </div>
     <div class="context-menu-item" data-action="refresh">
-      <span>Refresh</span>
+      <span data-i18n="context.refresh">刷新</span>
       <span class="context-menu-shortcut">F5</span>
     </div>
   </div>
+
+  <!-- Restart overlay template injected per tab when needed -->
 
   <!-- Command Palette Modal -->
   <div id="commandPalette" class="modal hidden">
@@ -526,7 +541,8 @@
             id="commandPaletteInput"
             type="text"
             class="command-palette-input"
-            placeholder="Type a command..."
+            placeholder="输入命令..."
+            data-i18n-placeholder="commandPalette.placeholder"
             autocomplete="off"
             spellcheck="false"
           />
@@ -535,19 +551,8 @@
           <!-- Results will be populated dynamically -->
         </div>
         <div class="command-palette-footer">
-          <span class="palette-hint">↑↓ Navigate • Enter Execute • Esc Close</span>
+          <span class="palette-hint" data-i18n="commandPalette.hint">↑↓ 导航 • Enter 执行 • Esc 关闭</span>
         </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Session Restart Overlay -->
-  <div id="sessionRestartOverlay" class="modal hidden" role="dialog" aria-modal="true" aria-label="Restarting Session">
-    <div class="modal-backdrop"></div>
-    <div class="modal-dialog" style="background: transparent; box-shadow: none; display: flex; justify-content: center; align-items: center; min-height: 30vh;">
-      <div class="restart-overlay">
-        <div class="restart-spinner"></div>
-        <div class="restart-text">正在重启会话…</div>
       </div>
     </div>
   </div>
@@ -556,24 +561,24 @@
   <!-- File Conflict Resolution Modal -->
   <div id="conflictModal" class="modal hidden">
     <div class="modal-backdrop"></div>
-    <div class="modal-dialog">
-      <div class="modal-header">
-        <h3 class="modal-title">File Already Exists</h3>
-      </div>
-      <div class="modal-body">
-        <p class="text-secondary" id="conflictText">The file already exists at the destination.</p>
-        <div class="form-group" style="margin-top: var(--space-md);">
-          <label class="form-label">File Name</label>
+      <div class="modal-dialog">
+        <div class="modal-header">
+        <h3 class="modal-title" data-i18n="conflict.title">文件已存在</h3>
+        </div>
+        <div class="modal-body">
+        <p class="text-secondary" id="conflictText">目标位置已存在同名文件。</p>
+          <div class="form-group" style="margin-top: var(--space-md);">
+          <label class="form-label" data-i18n="conflict.fieldLabel">文件名</label>
           <input id="conflictFileName" type="text" class="form-input" />
         </div>
         <div class="alert alert-warning" style="margin-top: var(--space-md);">
-          <strong>Note:</strong> Choosing "Overwrite" will replace the existing file. Use "Rename" to keep both files.
+          <strong data-i18n="conflict.noteLabel">提示：</strong> <span data-i18n="conflict.note">选择“覆盖”将替换现有文件；使用“重命名”可保留两个文件。</span>
         </div>
       </div>
       <div class="modal-footer">
-        <button id="conflictCancel" class="btn-secondary" type="button">Cancel</button>
-        <button id="conflictRename" class="btn-secondary" type="button">Rename</button>
-        <button id="conflictOverwrite" class="btn-primary" type="button">Overwrite</button>
+        <button id="conflictCancel" class="btn-secondary" type="button" data-i18n="conflict.cancel">取消</button>
+        <button id="conflictRename" class="btn-secondary" type="button" data-i18n="conflict.rename">重命名</button>
+        <button id="conflictOverwrite" class="btn-primary" type="button" data-i18n="conflict.overwrite">覆盖</button>
       </div>
     </div>
   </div>

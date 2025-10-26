@@ -15,10 +15,23 @@ const ProcessMonitor = require('./process-monitor');
 const OutputStreamer = require('./output-streamer');
 const CommandExecutor = require('./command-executor');
 const { FileLogger } = require('./logger');
+const { TmuxManager } = require('./tmux-manager');
 
 const TAB_DIR_NAME = 'tabs';
 const TAB_EXTENSION = '.smt';
 const fsp = fs.promises;
+const MAX_VIEW_TEXT_BYTES_DEFAULT = 2 * 1024 * 1024; // 2MB
+const MAX_VIEW_IMAGE_BYTES_DEFAULT = 6 * 1024 * 1024; // 6MB
+const IMAGE_MIME_MAP = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml'
+};
+const IMAGE_EXTENSIONS = new Set(Object.keys(IMAGE_MIME_MAP));
 
 function findExecutable(candidate) {
   if (!candidate) return null;
@@ -149,6 +162,8 @@ function buildAppMenu() {
 
 /** @type {Map<string, import('node-pty').IPty>} */
 const PTYS = new Map();
+/** @type {Map<string, { type: string, sessionName?: string, cleanup?: Function, manager?: any, stream?: any }>} */
+const PTY_META = new Map();
 /** @type {Map<string, any>} */
 const SSH_CONNS = new Map();
 /** @type {Map<string, ProcessMonitor>} */
@@ -157,6 +172,8 @@ const MONITORS = new Map();
 const STREAMERS = new Map();
 /** @type {CommandExecutor} */
 let commandExecutor = null;
+/** @type {TmuxManager|null} */
+let tmuxManager = null;
 
 // Lightweight app-level metrics sampling (uses Electron app.getAppMetrics)
 let APP_METRICS_TIMER = null;
@@ -203,6 +220,147 @@ function startAppMetricsSampling() {
 function stopAppMetricsSampling() {
   if (APP_METRICS_TIMER) { clearInterval(APP_METRICS_TIMER); APP_METRICS_TIMER = null; }
   try { if (APP_METRICS_STREAM) { APP_METRICS_STREAM.end(); APP_METRICS_STREAM = null; } } catch (_) {}
+}
+
+function ensureTmuxManager() {
+  if (tmuxManager) return tmuxManager;
+  let userDataDir;
+  try {
+    userDataDir = app.getPath('userData');
+  } catch (err) {
+    userDataDir = path.join(os.tmpdir(), 'smarterminal');
+  }
+  tmuxManager = new TmuxManager({ appRoot: __dirname, userDataDir, logger: LOGGER });
+  return tmuxManager;
+}
+
+function cleanupSessionArtifacts(ptyId) {
+  const mon = MONITORS.get(ptyId);
+  if (mon) {
+    try { mon.stop(); } catch (_) {}
+    MONITORS.delete(ptyId);
+  }
+  const str = STREAMERS.get(ptyId);
+  if (str) {
+    try { str.close(); } catch (_) {}
+    STREAMERS.delete(ptyId);
+  }
+  PTYS.delete(ptyId);
+  PTY_META.delete(ptyId);
+}
+
+function registerNodePtyProcess({ event, ptyId, proc, mode = 'pty', meta, extraData = {} }) {
+  PTYS.set(ptyId, proc);
+  PTY_META.set(ptyId, { type: mode, ...(meta || {}) });
+
+  const streamer = new OutputStreamer(ptyId);
+  streamer.open();
+  STREAMERS.set(ptyId, streamer);
+
+  const monitor = new ProcessMonitor(ptyId, proc.pid);
+  MONITORS.set(ptyId, monitor);
+  monitor.start();
+
+  monitor.on('update', (metrics) => {
+    try { event.sender.send('evt.term.metrics', { ptyId, metrics }); } catch (_) {}
+  });
+  monitor.on('high-cpu', (metrics) => {
+    try {
+      LOGGER && LOGGER.warn('term.high-cpu', { ptyId, cpu: metrics.cpuUsage, mem: metrics.memoryUsage });
+      event.sender.send('evt.term.warning', { ptyId, type: 'high-cpu', message: 'High CPU usage detected', metrics });
+    } catch (_) {}
+  });
+  monitor.on('high-memory', (metrics) => {
+    try {
+      LOGGER && LOGGER.warn('term.high-memory', { ptyId, cpu: metrics.cpuUsage, mem: metrics.memoryUsage });
+      event.sender.send('evt.term.warning', { ptyId, type: 'high-memory', message: 'High memory usage detected', metrics });
+    } catch (_) {}
+  });
+
+  proc.onData(data => {
+    try {
+      monitor.recordOutput(data.length);
+      streamer.write(data);
+      event.sender.send('evt.term.data', { ptyId, data });
+    } catch (_) {}
+  });
+
+  proc.onExit(e => {
+    try {
+      LOGGER && LOGGER.info('term.exit', { ptyId, code: e.exitCode, signal: e.signal });
+      const metaEntry = PTY_META.get(ptyId);
+      if (metaEntry && typeof metaEntry.cleanup === 'function') {
+        try { metaEntry.cleanup({ code: e.exitCode, signal: e.signal }); } catch (err) {
+          LOGGER && LOGGER.warn('term.exit.cleanupFailed', { ptyId, error: err?.message || err });
+        }
+      }
+      event.sender.send('evt.term.exit', { ptyId, code: e.exitCode, signal: e.signal });
+    } catch (_) {}
+    cleanupSessionArtifacts(ptyId);
+  });
+
+  return { ok: true, data: { ptyId, mode, ...extraData } };
+}
+
+function registerStdioProcess({ event, ptyId, proc, mode = 'stdio', meta, extraData = {} }) {
+  PTYS.set(ptyId, proc);
+  PTY_META.set(ptyId, { type: mode, ...(meta || {}) });
+
+  const streamer = new OutputStreamer(ptyId);
+  streamer.open();
+  STREAMERS.set(ptyId, streamer);
+
+  const monitor = new ProcessMonitor(ptyId, proc.pid);
+  MONITORS.set(ptyId, monitor);
+  monitor.start();
+
+  monitor.on('update', (metrics) => {
+    try { event.sender.send('evt.term.metrics', { ptyId, metrics }); } catch (_) {}
+  });
+  monitor.on('high-cpu', (metrics) => {
+    try {
+      LOGGER && LOGGER.warn('term.high-cpu', { ptyId, cpu: metrics.cpuUsage, mem: metrics.memoryUsage });
+      event.sender.send('evt.term.warning', { ptyId, type: 'high-cpu', message: 'High CPU usage detected', metrics });
+    } catch (_) {}
+  });
+  monitor.on('high-memory', (metrics) => {
+    try {
+      LOGGER && LOGGER.warn('term.high-memory', { ptyId, cpu: metrics.cpuUsage, mem: metrics.memoryUsage });
+      event.sender.send('evt.term.warning', { ptyId, type: 'high-memory', message: 'High memory usage detected', metrics });
+    } catch (_) {}
+  });
+
+  proc.stdout.on('data', buf => {
+    try {
+      const data = buf.toString('utf8');
+      monitor.recordOutput(data.length);
+      streamer.write(data);
+      event.sender.send('evt.term.data', { ptyId, data });
+    } catch (_) {}
+  });
+  proc.stderr.on('data', buf => {
+    try {
+      const data = buf.toString('utf8');
+      monitor.recordOutput(data.length);
+      streamer.write(data);
+      event.sender.send('evt.term.data', { ptyId, data });
+    } catch (_) {}
+  });
+
+  proc.on('close', code => {
+    try {
+      const metaEntry = PTY_META.get(ptyId);
+      if (metaEntry && typeof metaEntry.cleanup === 'function') {
+        try { metaEntry.cleanup({ code }); } catch (err) {
+          LOGGER && LOGGER.warn('term.exit.cleanupFailed', { ptyId, error: err?.message || err });
+        }
+      }
+      event.sender.send('evt.term.exit', { ptyId, code });
+    } catch (_) {}
+    cleanupSessionArtifacts(ptyId);
+  });
+
+  return { ok: true, data: { ptyId, mode, ...extraData } };
 }
 
 function setupCrashAndDiagnostics() {
@@ -399,38 +557,172 @@ app.on('before-quit', async () => {
 
 // IPC contracts (whitelist)
 // Terminal spawn
-ipcMain.handle('term.spawn', (event, args) => {
-  const { tabId, shellName, cwd, cols, rows, encoding, preferUTF8 } = args || {};
+ipcMain.handle('term.spawn', async (event, args) => {
+  const {
+    shellName,
+    cwd,
+    cols,
+    rows,
+    encoding,
+    preferUTF8,
+    mode: requestedMode,
+    tmux: tmuxOptions = {},
+    sshTarget,
+    env: extraEnv = {}
+  } = args || {};
 
-  // Resolve default shell per platform
+  const safeCols = Math.max(20, cols || 120);
+  const safeRows = Math.max(5, rows || 30);
+  const mode = requestedMode || 'pty';
+
+  if (mode === 'tmux-ssh') {
+    try {
+      if (!sshTarget || !sshTarget.host || !sshTarget.username) {
+        return { ok: false, error: 'SSH_TARGET_REQUIRED' };
+      }
+      const manager = ensureTmuxManager();
+      const sessionName = tmuxOptions.sessionName || `ssh_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      const session = await manager.createRemoteSession({ target: sshTarget, cols: safeCols, rows: safeRows, sessionName });
+      const ptyId = session.sessionName;
+      const stream = session.stream;
+
+      const streamer = new OutputStreamer(ptyId);
+      streamer.open();
+      STREAMERS.set(ptyId, streamer);
+
+      PTYS.set(ptyId, {
+        write: (data) => {
+          try { stream.write(data); } catch (err) {
+            LOGGER && LOGGER.warn('term.write.remote_failed', { ptyId, error: err?.message || err });
+          }
+        },
+        resize: (colsUpdate, rowsUpdate) => {
+          manager.resizeSession(session.sessionName, Math.max(20, colsUpdate || safeCols), Math.max(5, rowsUpdate || safeRows));
+        }
+      });
+
+      PTY_META.set(ptyId, {
+        type: 'tmux-ssh',
+        sessionName: session.sessionName,
+        manager,
+        stream,
+        destroy: async ({ keepRemote } = {}) => {
+          try { stream.close(); } catch (_) {}
+          try { await manager.destroySession(session.sessionName, { keepRemote: keepRemote !== false }); } catch (_) {}
+        },
+        cleanup: () => manager.destroySession(session.sessionName, { keepRemote: true }).catch(() => {})
+      });
+
+      stream.on('data', (chunk) => {
+        try {
+          const data = chunk.toString(encoding || 'utf8');
+          streamer.write(data);
+          event.sender.send('evt.term.data', { ptyId, data });
+        } catch (err) {
+          LOGGER && LOGGER.warn('term.remote.data_error', { ptyId, error: err?.message || err });
+        }
+      });
+
+      stream.on('close', (code) => {
+        try {
+          const metaEntry = PTY_META.get(ptyId);
+          if (metaEntry && typeof metaEntry.cleanup === 'function') {
+            const res = metaEntry.cleanup({ code: typeof code === 'number' ? code : 0 });
+            if (res && typeof res.then === 'function') {
+              res.catch((err) => {
+                LOGGER && LOGGER.warn('term.remote.cleanup_failed', { ptyId, error: err?.message || err });
+              });
+            }
+          }
+        } catch (err) {
+          LOGGER && LOGGER.warn('term.remote.cleanup_error', { ptyId, error: err?.message || err });
+        }
+        try {
+          event.sender.send('evt.term.exit', { ptyId, code: typeof code === 'number' ? code : 0 });
+        } catch (_) {}
+        cleanupSessionArtifacts(ptyId);
+      });
+
+      stream.on('error', (err) => {
+        LOGGER && LOGGER.warn('term.remote.stream_error', { ptyId, error: err?.message || err });
+      });
+
+      return {
+        ok: true,
+        data: {
+          ptyId,
+          mode: 'tmux-ssh',
+          sessionName: session.sessionName,
+          tmuxSource: session.source,
+          reusedSession: Boolean(session.reused)
+        }
+      };
+    } catch (err) {
+      LOGGER && LOGGER.error('term.spawn.tmux_ssh_failed', { error: err?.message || err });
+      return { ok: false, error: String(err?.message || err) };
+    }
+  }
+
+  if (mode === 'tmux-local') {
+    if (!pty) return { ok: false, error: 'TMUX_REQUIRES_PTY_SUPPORT' };
+    try {
+      const manager = ensureTmuxManager();
+      const sessionName = tmuxOptions.sessionName || `tmux_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      const session = await manager.createLocalSession({
+        sessionName,
+        cols: safeCols,
+        rows: safeRows,
+        cwd: cwd || os.homedir(),
+        env: extraEnv
+      });
+
+      return registerNodePtyProcess({
+        event,
+        ptyId: session.sessionName,
+        proc: session.proc,
+        mode: 'tmux-local',
+        meta: {
+          sessionName: session.sessionName,
+          cleanup: () => {
+            manager.destroySession(session.sessionName).catch(() => {});
+          }
+        },
+        extraData: {
+          sessionName: session.sessionName,
+          tmuxSource: session.source,
+          reusedSession: Boolean(session.reused)
+        }
+      });
+    } catch (err) {
+      LOGGER && LOGGER.error('term.spawn.tmux_local_failed', { error: err?.message || err });
+      return { ok: false, error: String(err?.message || err) };
+    }
+  }
+
   const shellExe = resolveShellExecutable(shellName);
   if (!shellExe) {
     return { ok: false, error: 'NO_COMPATIBLE_SHELL_FOUND' };
   }
 
-  const env = { ...process.env };
+  const env = { ...process.env, ...extraEnv };
   if (preferUTF8 && process.platform === 'win32') {
-    // Hint for UTF-8 on Windows; we do not force chcp.
     env.LC_ALL = 'C.UTF-8';
     env.LANG = 'C.UTF-8';
   }
-  // Ensure PATH is sane when launched from Finder (limited env)
   if (process.platform === 'darwin') {
     try {
       const extraPaths = ['/usr/local/bin', '/usr/local/sbin', '/opt/homebrew/bin', '/opt/homebrew/sbin'];
       const pathParts = (env.PATH || '').split(path.delimiter).filter(Boolean);
       for (const p of extraPaths) { if (!pathParts.includes(p) && fs.existsSync(p)) pathParts.unshift(p); }
-      for (const p of ['/usr/bin','/bin','/usr/sbin','/sbin']) { if (!pathParts.includes(p)) pathParts.push(p); }
+      for (const p of ['/usr/bin', '/bin', '/usr/sbin', '/sbin']) { if (!pathParts.includes(p)) pathParts.push(p); }
       env.PATH = pathParts.join(path.delimiter);
     } catch (_) {}
   }
 
   const ptyId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  let proc;
   try {
-    try { LOGGER && LOGGER.info('term.spawn', { ptyId, shell: shellExe, cwd: cwd || os.homedir(), cols: cols || 120, rows: rows || 30 }); } catch(_){}
+    try { LOGGER && LOGGER.info('term.spawn', { ptyId, shell: shellExe, cwd: cwd || os.homedir(), cols: safeCols, rows: safeRows }); } catch(_) {}
     if (pty) {
-      // Preferred PTY: use a login shell so PATH from ~/.zprofile and ~/.zshrc is loaded
       const spawnArgsPty = [];
       try {
         const lower = (shellExe || '').toLowerCase();
@@ -439,189 +731,51 @@ ipcMain.handle('term.spawn', (event, args) => {
         }
       } catch (_) {}
 
-      proc = pty.spawn(shellExe, spawnArgsPty, {
+      const proc = pty.spawn(shellExe, spawnArgsPty, {
         name: 'xterm-256color',
-        cols: cols || 120,
-        rows: rows || 30,
+        cols: safeCols,
+        rows: safeRows,
         cwd: cwd || os.homedir(),
         env
       });
-      PTYS.set(ptyId, proc);
 
-      // 创建输出流和监控器
-      const streamer = new OutputStreamer(ptyId);
-      streamer.open();
-      STREAMERS.set(ptyId, streamer);
-
-      const monitor = new ProcessMonitor(ptyId, proc.pid);
-      MONITORS.set(ptyId, monitor);
-      monitor.start();
-
-      // 监听监控事件并转发给渲染进程
-      monitor.on('update', (metrics) => {
-        try {
-          event.sender.send('evt.term.metrics', { ptyId, metrics });
-        } catch (_) {}
-      });
-
-      monitor.on('high-cpu', (metrics) => {
-        try {
-          LOGGER && LOGGER.warn('term.high-cpu', { ptyId, cpu: metrics.cpuUsage, mem: metrics.memoryUsage });
-          event.sender.send('evt.term.warning', { ptyId, type: 'high-cpu', message: 'High CPU usage detected', metrics });
-        } catch (_) {}
-      });
-
-      monitor.on('high-memory', (metrics) => {
-        try {
-          LOGGER && LOGGER.warn('term.high-memory', { ptyId, cpu: metrics.cpuUsage, mem: metrics.memoryUsage });
-          event.sender.send('evt.term.warning', { ptyId, type: 'high-memory', message: 'High memory usage detected', metrics });
-        } catch (_) {}
-      });
-
-      // Unresponsive monitoring removed
-
-      proc.onData(data => {
-        try {
-          // 记录输出到监控器
-          monitor.recordOutput(data.length);
-
-          // 流式写入文件
-          streamer.write(data);
-
-          // 发送给渲染进程
-          event.sender.send('evt.term.data', { ptyId, data });
-        } catch (_) {}
-      });
-
-      proc.onExit(e => {
-        try {
-          LOGGER && LOGGER.info('term.exit', { ptyId, code: e.exitCode, signal: e.signal });
-          // 停止监控和流
-          const mon = MONITORS.get(ptyId);
-          if (mon) {
-            mon.stop();
-            MONITORS.delete(ptyId);
-          }
-
-          const str = STREAMERS.get(ptyId);
-          if (str) {
-            str.close();
-            STREAMERS.delete(ptyId);
-          }
-
-          event.sender.send('evt.term.exit', { ptyId, code: e.exitCode, signal: e.signal });
-        } catch (_) {}
-        PTYS.delete(ptyId);
-      });
-    } else {
-      // Fallback strategy without node-pty: spawn the resolved login shell via pipes.
-      // Use the same shell as resolveShellExecutable() to respect user's default (zsh on macOS).
-      let sh = shellExe;
-      let spawnArgs = [];
-      if (process.platform === 'win32') {
-        spawnArgs = ['-NoLogo'];
-      } else {
-        // Ensure PATH contains common Homebrew/user locations when launched from Finder
-        try {
-          const extraPaths = ['/usr/local/bin', '/usr/local/sbin', '/opt/homebrew/bin', '/opt/homebrew/sbin'];
-          const pathParts = (env.PATH || '').split(path.delimiter).filter(Boolean);
-          for (const p of extraPaths) { if (!pathParts.includes(p) && fs.existsSync(p)) pathParts.unshift(p); }
-          // Also guarantee core system paths are present at the end
-          for (const p of ['/usr/bin','/bin','/usr/sbin','/sbin']) { if (!pathParts.includes(p)) pathParts.push(p); }
-          env.PATH = pathParts.join(path.delimiter);
-        } catch (_) {}
-
-        // If resolution failed for some reason, fall back in preferred order
-        if (!sh) sh = findExecutable('/bin/zsh') || findExecutable('/usr/bin/zsh');
-        if (!sh) sh = findExecutable('/bin/bash') || findExecutable('/usr/bin/bash');
-        if (!sh) sh = findExecutable('/bin/sh') || findExecutable('/usr/bin/sh');
-        // Interactivity: prefer login shells so user env (PATH, aliases) is loaded
-        if (sh && sh.includes('zsh')) spawnArgs = ['-l'];
-        else if (sh && sh.includes('bash')) spawnArgs = ['-l'];
-        else spawnArgs = ['-i'];
-        env.PS1 = env.PS1 || '';
-        env.TERM = env.TERM || 'xterm-256color';
-      }
-      try { LOGGER && LOGGER.info('term.spawn.fallback', { shell: sh, args: spawnArgs }); } catch(_){}
-      proc = spawn(sh, spawnArgs, { cwd: cwd || os.homedir(), env });
-      PTYS.set(ptyId, proc);
-
-      // 创建输出流和监控器（stdio 模式）
-      const streamer = new OutputStreamer(ptyId);
-      streamer.open();
-      STREAMERS.set(ptyId, streamer);
-
-      const monitor = new ProcessMonitor(ptyId, proc.pid);
-      MONITORS.set(ptyId, monitor);
-      monitor.start();
-
-      // 监听监控事件并转发给渲染进程
-      monitor.on('update', (metrics) => {
-        try {
-          event.sender.send('evt.term.metrics', { ptyId, metrics });
-        } catch (_) {}
-      });
-
-      monitor.on('high-cpu', (metrics) => {
-        try {
-          LOGGER && LOGGER.warn('term.high-cpu', { ptyId, cpu: metrics.cpuUsage, mem: metrics.memoryUsage });
-          event.sender.send('evt.term.warning', { ptyId, type: 'high-cpu', message: 'High CPU usage detected', metrics });
-        } catch (_) {}
-      });
-
-      monitor.on('high-memory', (metrics) => {
-        try {
-          LOGGER && LOGGER.warn('term.high-memory', { ptyId, cpu: metrics.cpuUsage, mem: metrics.memoryUsage });
-          event.sender.send('evt.term.warning', { ptyId, type: 'high-memory', message: 'High memory usage detected', metrics });
-        } catch (_) {}
-      });
-
-      // Unresponsive monitoring removed
-
-      proc.stdout.on('data', buf => {
-        try {
-          const data = buf.toString('utf8');
-          monitor.recordOutput(data.length);
-          streamer.write(data);
-          event.sender.send('evt.term.data', { ptyId, data });
-        } catch (_) {}
-      });
-
-      proc.stderr.on('data', buf => {
-        try {
-          const data = buf.toString('utf8');
-          monitor.recordOutput(data.length);
-          streamer.write(data);
-          event.sender.send('evt.term.data', { ptyId, data });
-        } catch (_) {}
-      });
-
-      proc.on('close', code => {
-        try {
-          // 停止监控和流
-          const mon = MONITORS.get(ptyId);
-          if (mon) {
-            mon.stop();
-            MONITORS.delete(ptyId);
-          }
-
-          const str = STREAMERS.get(ptyId);
-          if (str) {
-            str.close();
-            STREAMERS.delete(ptyId);
-          }
-
-          event.sender.send('evt.term.exit', { ptyId, code });
-        } catch (_) {}
-        PTYS.delete(ptyId);
+      return registerNodePtyProcess({
+        event,
+        ptyId,
+        proc,
+        mode: 'pty'
       });
     }
+
+    let sh = shellExe;
+    let spawnArgs = [];
+    if (process.platform === 'win32') {
+      spawnArgs = ['-NoLogo'];
+    } else {
+      try {
+        const extraPaths = ['/usr/local/bin', '/usr/local/sbin', '/opt/homebrew/bin', '/opt/homebrew/sbin'];
+        const pathParts = (env.PATH || '').split(path.delimiter).filter(Boolean);
+        for (const p of extraPaths) { if (!pathParts.includes(p) && fs.existsSync(p)) pathParts.unshift(p); }
+        for (const p of ['/usr/bin', '/bin', '/usr/sbin', '/sbin']) { if (!pathParts.includes(p)) pathParts.push(p); }
+        env.PATH = pathParts.join(path.delimiter);
+      } catch (_) {}
+
+      if (!sh) sh = findExecutable('/bin/zsh') || findExecutable('/usr/bin/zsh');
+      if (!sh) sh = findExecutable('/bin/bash') || findExecutable('/usr/bin/bash');
+      if (!sh) sh = findExecutable('/bin/sh') || findExecutable('/usr/bin/sh');
+      if (sh && sh.includes('zsh')) spawnArgs = ['-l'];
+      else if (sh && sh.includes('bash')) spawnArgs = ['-l'];
+      else spawnArgs = ['-i'];
+      env.PS1 = env.PS1 || '';
+      env.TERM = env.TERM || 'xterm-256color';
+    }
+    try { LOGGER && LOGGER.info('term.spawn.fallback', { shell: sh, args: spawnArgs }); } catch(_){}
+    const proc = spawn(sh, spawnArgs, { cwd: cwd || os.homedir(), env });
+    return registerStdioProcess({ event, ptyId, proc, mode: 'stdio' });
   } catch (err) {
     console.error('[term.spawn] Failed to launch shell:', err);
     return { ok: false, error: String(err?.message || err) };
   }
-
-  return { ok: true, data: { ptyId, mode: pty ? 'pty' : 'stdio' } };
 });
 
 ipcMain.handle('term.write', (_e, { ptyId, data }) => {
@@ -686,7 +840,14 @@ ipcMain.handle('clipboard.readFilePaths', () => {
 
     return { ok: true, data: paths };
   } catch (err) {
-    return { ok: false, error: String(err?.message || err) };
+    return {
+      ok: false,
+      error: err?.code || 'READ_ERROR',
+      data: {
+        message: err?.message || String(err || ''),
+        path: targetPath
+      }
+    };
   }
 });
 
@@ -697,17 +858,59 @@ ipcMain.handle('term.resize', (_e, { ptyId, cols, rows }) => {
   return { ok: true };
 });
 
-ipcMain.handle('term.kill', (_e, { ptyId }) => {
+ipcMain.handle('term.kill', async (_e, { ptyId, keepRemote = true }) => {
+  const meta = PTY_META.get(ptyId);
+  if (meta && meta.type === 'tmux-ssh') {
+    try {
+      if (typeof meta.destroy === 'function') {
+        await meta.destroy({ keepRemote });
+      } else {
+        cleanupSessionArtifacts(ptyId);
+      }
+    } catch (err) {
+      LOGGER && LOGGER.warn('term.kill.remote_failed', { ptyId, error: err?.message || err });
+    }
+    return { ok: true };
+  }
   const p = PTYS.get(ptyId);
   if (p) {
     try { p.kill ? p.kill() : p.stdin.end(); } catch (_) {}
-    PTYS.delete(ptyId);
   }
   return { ok: true };
 });
 
+ipcMain.handle('tmux.destroyDetached', async (_e, payload = {}) => {
+  try {
+    const { sessionName, mode, sshTarget } = payload || {};
+    if (!sessionName) {
+      return { ok: false, error: 'SESSION_NAME_REQUIRED' };
+    }
+    const manager = ensureTmuxManager();
+    await manager.killDetachedSession({
+      sessionName,
+      mode: mode || 'tmux-local',
+      target: sshTarget || null
+    });
+    return { ok: true };
+  } catch (err) {
+    LOGGER && LOGGER.warn('tmux.destroyDetached.failed', { sessionName: payload?.sessionName, error: err?.message || err });
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+
 // Force kill a process by ptyId (legacy - for PTY/stdio shells)
-ipcMain.handle('term.forceKill', (_e, { ptyId }) => {
+ipcMain.handle('term.forceKill', async (_e, { ptyId }) => {
+  const meta = PTY_META.get(ptyId);
+  if (meta && meta.type === 'tmux-ssh') {
+    try {
+      if (typeof meta.destroy === 'function') {
+        await meta.destroy({ keepRemote: false });
+      }
+    } catch (err) {
+      LOGGER && LOGGER.warn('term.forceKill.remote_failed', { ptyId, error: err?.message || err });
+    }
+    return { ok: true };
+  }
   const p = PTYS.get(ptyId);
   if (p) {
     try {
@@ -1202,6 +1405,42 @@ function sanitizeTitle(title) {
   return trimmed.length ? trimmed : 'Chat';
 }
 
+function normalizeTmuxSessionPayload(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = typeof raw.name === 'string'
+    ? raw.name.trim()
+    : (typeof raw.sessionName === 'string' ? raw.sessionName.trim() : '');
+  if (!name) return null;
+  const mode = typeof raw.mode === 'string'
+    ? raw.mode
+    : (typeof raw.backendMode === 'string' ? raw.backendMode : null);
+  const normalized = {
+    name,
+    mode: mode || null,
+    backendMode: mode || null,
+    source: typeof raw.source === 'string' && raw.source ? raw.source : null,
+    lastSeen: Number.isFinite(raw.lastSeen) ? raw.lastSeen : Date.now()
+  };
+  if (raw.reused !== undefined) {
+    normalized.reused = Boolean(raw.reused);
+  }
+  if (raw.sshTarget && typeof raw.sshTarget === 'object') {
+    const allowedKeys = ['host', 'port', 'username', 'tmuxSocket', 'prependPath'];
+    const sanitized = {};
+    let hasKey = false;
+    for (const key of allowedKeys) {
+      if (raw.sshTarget[key] !== undefined && raw.sshTarget[key] !== null) {
+        sanitized[key] = raw.sshTarget[key];
+        hasKey = true;
+      }
+    }
+    if (hasKey) {
+      normalized.sshTarget = sanitized;
+    }
+  }
+  return normalized;
+}
+
 function formatTimestampForFile(date = new Date()) {
   const pad = (value, length = 2) => String(value).padStart(length, '0');
   const year = date.getFullYear();
@@ -1246,6 +1485,7 @@ function registerTabHandlers() {
             deleted: Boolean(parsed.deleted),
             deletedAt: parsed.deletedAt || null,
             state: parsed.state || null,
+            tmuxSession: normalizeTmuxSessionPayload(parsed.tmuxSession),
             createdAt: parsed.createdAt || stats?.birthtimeMs || Date.now(),
             updatedAt: parsed.updatedAt || stats?.mtimeMs || parsed.createdAt || Date.now()
           });
@@ -1272,7 +1512,8 @@ function registerTabHandlers() {
         description: '',
         deleted: false,
         deletedAt: null,
-        state: null
+        state: null,
+        tmuxSession: null
       };
       ensureTabsDir();
       let lastError = null;
@@ -1281,7 +1522,19 @@ function registerTabHandlers() {
         const filePath = tabFilePath(fileName);
         try {
           await fsp.writeFile(filePath, JSON.stringify(payload, null, 2), { encoding: 'utf8', flag: 'wx' });
-          return { ok: true, data: { fileName, title: safeTitle, favorite: false, description: '', customTitle: false, createdAt: payload.createdAt, updatedAt: payload.updatedAt } };
+          return {
+            ok: true,
+            data: {
+              fileName,
+              title: safeTitle,
+              favorite: false,
+              description: '',
+              customTitle: false,
+              createdAt: payload.createdAt,
+              updatedAt: payload.updatedAt,
+              tmuxSession: null
+            }
+          };
         } catch (err) {
           if (err?.code === 'EEXIST') {
             lastError = err;
@@ -1296,8 +1549,19 @@ function registerTabHandlers() {
     }
   });
 
-  ipcMain.handle('tabs.save', async (_event, { fileName, title, state, favorite, description, customTitle, deleted, deletedAt }) => {
+  ipcMain.handle('tabs.save', async (_event, payload = {}) => {
     try {
+      const {
+        fileName,
+        title,
+        state,
+        favorite,
+        description,
+        customTitle,
+        deleted,
+        deletedAt,
+        tmuxSession
+      } = payload || {};
       const safeTitle = sanitizeTitle(title);
       const filePath = tabFilePath(fileName);
       let previous = {};
@@ -1307,13 +1571,17 @@ function registerTabHandlers() {
       } catch (_) {
         previous = {};
       }
+      const hasTmuxSessionField = Object.prototype.hasOwnProperty.call(payload || {}, 'tmuxSession');
       const nextDeleted = typeof deleted === 'boolean'
         ? deleted
         : (typeof previous.deleted === 'boolean' ? previous.deleted : false);
       const nextDeletedAt = nextDeleted
         ? (Number.isFinite(deletedAt) ? deletedAt : (previous.deletedAt || Date.now()))
         : null;
-      const payload = {
+      const nextTmuxSession = hasTmuxSessionField
+        ? normalizeTmuxSessionPayload(tmuxSession)
+        : normalizeTmuxSessionPayload(previous.tmuxSession);
+      const payloadToWrite = {
         title: safeTitle,
         createdAt: previous.createdAt || Date.now(),
         updatedAt: Date.now(),
@@ -1322,10 +1590,22 @@ function registerTabHandlers() {
         description: typeof description === 'string' ? description : (typeof previous.description === 'string' ? previous.description : ''),
         deleted: nextDeleted,
         deletedAt: nextDeletedAt,
-        state: state !== undefined ? state : (previous.state || null)
+        state: state !== undefined ? state : (previous.state || null),
+        tmuxSession: nextTmuxSession
       };
-      await fsp.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
-      return { ok: true, data: { updatedAt: payload.updatedAt, favorite: payload.favorite, description: payload.description, customTitle: payload.customTitle, deleted: payload.deleted, deletedAt: payload.deletedAt } };
+      await fsp.writeFile(filePath, JSON.stringify(payloadToWrite, null, 2), 'utf8');
+      return {
+        ok: true,
+        data: {
+          updatedAt: payloadToWrite.updatedAt,
+          favorite: payloadToWrite.favorite,
+          description: payloadToWrite.description,
+          customTitle: payloadToWrite.customTitle,
+          deleted: payloadToWrite.deleted,
+          deletedAt: payloadToWrite.deletedAt,
+          tmuxSession: payloadToWrite.tmuxSession
+        }
+      };
     } catch (err) {
       return { ok: false, error: String(err?.message || err) };
     }
@@ -1372,7 +1652,14 @@ ipcMain.handle('fs.rename', async (_e, { oldPath, newPath }) => {
     await fs.promises.rename(oldPath, newPath);
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: String(err?.message || err) };
+    return {
+      ok: false,
+      error: err?.code || String(err?.message || err),
+      data: {
+        message: err?.message || String(err || ''),
+        path: targetPath
+      }
+    };
   }
 });
 
@@ -1452,3 +1739,106 @@ ipcMain.handle('fs.copy', async (_e, { sourcePath, targetPath }) => {
     return { ok: false, error: String(err?.message || err) };
   }
 });
+
+ipcMain.handle('fs.readFile', async (_e, payload = {}) => {
+  try {
+    const { path: targetPath, encoding = 'utf8', cwd = null, maxBytes = null } = payload || {};
+    if (!targetPath || typeof targetPath !== 'string') {
+      return { ok: false, error: 'INVALID_PATH' };
+    }
+
+    const resolvedPath = resolveUserPath(targetPath, cwd);
+    if (!resolvedPath) {
+      return { ok: false, error: 'INVALID_PATH' };
+    }
+
+    const stats = await fsp.stat(resolvedPath);
+    if (!stats.isFile()) {
+      return { ok: false, error: 'NOT_A_FILE' };
+    }
+
+    const extension = path.extname(resolvedPath).toLowerCase();
+    const isImage = IMAGE_EXTENSIONS.has(extension);
+    const defaultLimit = isImage ? MAX_VIEW_IMAGE_BYTES_DEFAULT : MAX_VIEW_TEXT_BYTES_DEFAULT;
+    const limit = typeof maxBytes === 'number' && maxBytes > 0
+      ? Math.min(maxBytes, 16 * 1024 * 1024)
+      : defaultLimit;
+
+    if (stats.size > limit) {
+      return {
+        ok: false,
+        error: 'FILE_TOO_LARGE',
+        data: { size: stats.size, limit, path: resolvedPath }
+      };
+    }
+
+    let content;
+    let encodingUsed = encoding || 'utf8';
+    let mime = null;
+    let kind = 'text';
+
+    if (isImage) {
+      const buffer = await fsp.readFile(resolvedPath);
+      mime = IMAGE_MIME_MAP[extension] || 'application/octet-stream';
+      const base64 = buffer.toString('base64');
+      content = `data:${mime};base64,${base64}`;
+      encodingUsed = 'base64';
+      kind = 'image';
+    } else {
+      const safeEncoding = typeof encoding === 'string' && encoding
+        ? encoding
+        : 'utf8';
+      content = await fsp.readFile(resolvedPath, { encoding: safeEncoding });
+      encodingUsed = safeEncoding;
+      kind = 'text';
+    }
+
+    return {
+      ok: true,
+      data: {
+        path: resolvedPath,
+        extension,
+        kind,
+        content,
+        encoding: encodingUsed,
+        mime,
+        size: stats.size,
+        mtime: stats.mtimeMs
+      }
+    };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+function stripEnclosingQuotes(value) {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function expandHomeSegment(segment) {
+  if (typeof segment !== 'string' || !segment.trim()) return segment;
+  const trimmed = segment.trim();
+  if (trimmed === '~') return os.homedir();
+  if (trimmed.startsWith('~/') || trimmed.startsWith('~\\')) {
+    return path.join(os.homedir(), trimmed.slice(2));
+  }
+  return trimmed;
+}
+
+function resolveUserPath(targetPath, cwd) {
+  if (!targetPath || typeof targetPath !== 'string') return null;
+  const expanded = expandHomeSegment(stripEnclosingQuotes(targetPath));
+  if (!expanded) return null;
+  if (path.isAbsolute(expanded)) {
+    return path.resolve(expanded);
+  }
+  const baseDir = typeof cwd === 'string' && cwd.trim()
+    ? expandHomeSegment(cwd.trim())
+    : process.cwd();
+  return path.resolve(baseDir || process.cwd(), expanded);
+}

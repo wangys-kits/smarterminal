@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('sm', {
     resize: (args) => invoke('term.resize', args),
     kill: (args) => invoke('term.kill', args),
     forceKill: (args) => invoke('term.forceKill', args),
+    destroyTmuxSession: (args) => invoke('tmux.destroyDetached', args),
     onData: (cb) => ipcRenderer.on('evt.term.data', (_e, m) => cb(m)),
     onExit: (cb) => ipcRenderer.on('evt.term.exit', (_e, m) => cb(m)),
     onMetrics: (cb) => ipcRenderer.on('evt.term.metrics', (_e, m) => cb(m)),
@@ -32,7 +33,8 @@ contextBridge.exposeInMainWorld('sm', {
     delete: (args) => invoke('fs.delete', args),
     mkdir: (args) => invoke('fs.mkdir', args),
     createFile: (args) => invoke('fs.createFile', args),
-    copy: (args) => invoke('fs.copy', args)
+    copy: (args) => invoke('fs.copy', args),
+    readFile: (args) => invoke('fs.readFile', args)
   },
   settings: { get: () => invoke('settings.get'), set: (p) => invoke('settings.set', p) },
   session: { load: () => invoke('session.load'), save: (s) => invoke('session.save', s) },

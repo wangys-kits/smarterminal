@@ -1,0 +1,12 @@
+{
+  "linux": {
+    "x86_64": {
+      "relativePath": "linux-x86_64/tmux",
+      "checksumFile": "linux-x86_64/tmux.sha256"
+    },
+    "arm64": {
+      "relativePath": "linux-arm64/tmux",
+      "checksumFile": "linux-arm64/tmux.sha256"
+    }
+  }
+}

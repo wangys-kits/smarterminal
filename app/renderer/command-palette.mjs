@@ -1,5 +1,7 @@
 /* Command Palette Module */
 
+import i18n from './i18n.mjs';
+
 export class CommandPalette {
   constructor() {
     this.modal = document.getElementById('commandPalette');
@@ -10,10 +12,14 @@ export class CommandPalette {
 
     this.commands = [];
     this.setupEventListeners();
+    i18n.onChange(() => this.updateLocale());
   }
 
   registerCommands(commands) {
     this.commands = commands;
+    if (this.modal && !this.modal.classList.contains('hidden')) {
+      this.filterCommands(this.input.value || '', { preserveSelection: true });
+    }
   }
 
   setupEventListeners() {
@@ -52,23 +58,29 @@ export class CommandPalette {
     this.modal.classList.remove('hidden');
     this.input.value = '';
     this.input.focus();
-    this.filteredCommands = [...this.commands];
-    this.selectedIndex = 0;
-    this.render();
+    this.filterCommands('');
   }
 
   hide() {
     this.modal.classList.add('hidden');
   }
 
-  filterCommands(query) {
-    const lower = query.toLowerCase();
-    this.filteredCommands = this.commands.filter(cmd =>
-      cmd.name.toLowerCase().includes(lower) ||
-      cmd.description.toLowerCase().includes(lower) ||
-      (cmd.tags && cmd.tags.some(tag => tag.toLowerCase().includes(lower)))
-    );
-    this.selectedIndex = 0;
+  filterCommands(query, options = {}) {
+    const { preserveSelection = false } = options;
+    const previousCommand = preserveSelection ? this.filteredCommands[this.selectedIndex] : null;
+    const lower = (query || '').toLowerCase();
+    this.filteredCommands = this.commands.filter(cmd => {
+      const name = this.getCommandName(cmd).toLowerCase();
+      const desc = this.getCommandDescription(cmd).toLowerCase();
+      const tagMatch = cmd.tags && cmd.tags.some(tag => tag.toLowerCase().includes(lower));
+      return name.includes(lower) || desc.includes(lower) || tagMatch;
+    });
+    if (preserveSelection && previousCommand) {
+      const newIndex = this.filteredCommands.findIndex(cmd => cmd.id === previousCommand.id);
+      this.selectedIndex = newIndex >= 0 ? newIndex : 0;
+    } else {
+      this.selectedIndex = 0;
+    }
     this.render();
   }
 
@@ -78,20 +90,22 @@ export class CommandPalette {
     if (this.filteredCommands.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'command-palette-empty';
-      empty.textContent = 'No commands found';
+      empty.textContent = i18n.t('commandPalette.empty', 'No commands found');
       this.results.appendChild(empty);
       return;
     }
 
     this.filteredCommands.forEach((cmd, index) => {
+      const name = this.getCommandName(cmd);
+      const desc = this.getCommandDescription(cmd);
       const item = document.createElement('div');
       item.className = 'command-palette-item' + (index === this.selectedIndex ? ' selected' : '');
 
       item.innerHTML = `
         <div class="command-icon">${cmd.icon || '⚡'}</div>
         <div class="command-details">
-          <div class="command-name">${cmd.name}</div>
-          <div class="command-description">${cmd.description}</div>
+          <div class="command-name">${name}</div>
+          <div class="command-description">${desc}</div>
         </div>
         ${cmd.shortcut ? `<div class="command-shortcut"><kbd>${cmd.shortcut}</kbd></div>` : ''}
       `;
@@ -113,5 +127,24 @@ export class CommandPalette {
       cmd.action();
       this.hide();
     }
+  }
+
+  updateLocale() {
+    // Reapply filter so rendered text uses latest translations
+    this.filterCommands(this.input.value || '', { preserveSelection: true });
+  }
+
+  getCommandName(cmd) {
+    if (cmd.nameKey) {
+      return i18n.t(cmd.nameKey, cmd.name || '');
+    }
+    return cmd.name || '';
+  }
+
+  getCommandDescription(cmd) {
+    if (cmd.descriptionKey) {
+      return i18n.t(cmd.descriptionKey, cmd.description || '');
+    }
+    return cmd.description || '';
   }
 }
